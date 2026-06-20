@@ -280,12 +280,15 @@ def reindex_fill(df_in, target_col=TARGET, train_cutoff_time=None, val_cutoff_ti
     for col in col_names:
         d[col] = pd.Series(arrays[col], index=d.index)
 
-    # Categorical columns: ffill, not linear interpolation
+ # Biến phân loại (Categorical): Bảo toàn giá trị nguyên bản (đã lấy từ Pattern Matching)
+    # Chỉ dùng ffill cho các khe hở siêu nhỏ xót lại
     cat_cols = [c for c in ("weather_type", "isSun") if c in d.columns]
-    cat_backup = {c: d[c].copy() for c in cat_cols}
-    d = d.interpolate(method="time").ffill().bfill()
-    for c, orig in cat_backup.items():
-        d[c] = orig.ffill().bfill()
+    for c in cat_cols:
+        d[c] = d[c].ffill().bfill()
+
+    # Các biến số thực (Numeric): Nội suy tuyến tính an toàn
+    numeric_cols = [c for c in d.columns if c not in cat_cols]
+    d[numeric_cols] = d[numeric_cols].interpolate(method="time").ffill().bfill()
 
     d[target_col] = d[target_col].clip(lower=0)
 

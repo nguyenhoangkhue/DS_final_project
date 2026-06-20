@@ -276,6 +276,52 @@ print("\nVIF Analysis:")
 print(vif_df.to_string())
 
 print("\n" + "=" * 60)
+print("CORRELATION MATRIX (15 weather columns from Renewable.csv)")
+print("=" * 60)
+
+WEATHER_COLS = [
+    "GHI", "temp", "pressure", "humidity", "wind_speed",
+    "rain_1h", "snow_1h", "clouds_all", "isSun", "sunlightTime",
+    "dayLength", "SunlightTime/daylength", "weather_type", "hour", "month",
+]
+raw_df = pd.read_csv("data/filled_renewable.csv")
+corr_df = raw_df[WEATHER_COLS].corr()
+print(corr_df.to_string())
+
+pairs = []
+for i in range(len(WEATHER_COLS)):
+    for j in range(i + 1, len(WEATHER_COLS)):
+        pairs.append((corr_df.values[i, j], WEATHER_COLS[i], WEATHER_COLS[j]))
+pairs.sort(key=lambda x: x[0], reverse=True)
+
+print("\n--- POSITIVE CORRELATION ---")
+for val, a, b in [p for p in pairs if p[0] > 0]:
+    print(f"  {a:>28} vs {b:<28}  {val:+.4f}")
+
+print("\n--- NEGATIVE CORRELATION ---")
+for val, a, b in [p for p in pairs if p[0] < 0]:
+    print(f"  {a:>28} vs {b:<28}  {val:+.4f}")
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(14, 12))
+im = ax.imshow(corr_df.values, cmap="RdYlBu", vmin=-1, vmax=1)
+ax.set_xticks(range(len(WEATHER_COLS)))
+ax.set_yticks(range(len(WEATHER_COLS)))
+ax.set_xticklabels(WEATHER_COLS, rotation=45, ha="right", fontsize=8)
+ax.set_yticklabels(WEATHER_COLS, fontsize=8)
+for i in range(len(WEATHER_COLS)):
+    for j in range(len(WEATHER_COLS)):
+        val = corr_df.values[i, j]
+        color = "white" if abs(val) > 0.5 else "black"
+        ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=6, color=color)
+fig.colorbar(im, ax=ax, shrink=0.75)
+ax.set_title("Weather Feature Correlation Matrix", fontweight="bold")
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/weather_correlation.png", dpi=150, bbox_inches="tight")
+plt.close()
+print(f"Saved weather_correlation.png")
+
+print("\n" + "=" * 60)
 print("SAVING MODELS AND RESULTS")
 print("=" * 60)
 

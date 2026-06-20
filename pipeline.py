@@ -82,7 +82,7 @@ def reindex_fill(df_in, target_col=TARGET):
 
     col_names = d.columns.tolist()
     arrays = {col: d[col].values.copy() for col in col_names}
-    n = len(arrays[target_col])
+    n_arr = len(arrays[target_col])
 
     for gap_id in gap_groups[is_missing].unique():
         gap_positions = np.where(gap_groups.values == gap_id)[0]
@@ -97,8 +97,8 @@ def reindex_fill(df_in, target_col=TARGET):
         if np.isnan(context).any():
             continue
 
-        max_search = min(n - gap_len - seasonal_window, context_start + seasonal_window * 90)
-        search_starts = np.arange(seasonal_window, max_search, max(1, gap_len // 4))
+        max_stop = min(n_arr, context_start) - gap_len + 1 
+        search_starts = np.arange(seasonal_window, max_stop, max(1, gap_len // 4))
 
         best_score = -np.inf
         best_i = None

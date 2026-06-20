@@ -702,6 +702,20 @@ plt.savefig(f"{TARGET_DIR}/11_train.png", dpi=150, bbox_inches="tight")
 plt.close()
 print("Saved 11_train.png")
 
+ONE_WEEK = 7 * 96
+rng = np.random.RandomState(42)
+train_start = rng.randint(0, max(1, len(train_fe) - ONE_WEEK))
+train_slice = slice(train_start, train_start + ONE_WEEK)
+fig, ax = plt.subplots(figsize=(18, 5))
+plot_split_timeline(ax, train_fe.index[train_slice], train_fe[TARGET].values[train_slice], tr_pred[train_slice],
+                    "LightGBM — Training Set (1-Week Zoom)", True, True)
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%H:%M"))
+ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/11_train_zoom.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 11_train_zoom.png")
+
 # Val split
 fig, ax = plt.subplots(figsize=(18, 5))
 plot_split_timeline(ax, val_fe.index, val_fe[TARGET].values, va_pred,
@@ -711,6 +725,18 @@ plt.savefig(f"{TARGET_DIR}/11_val.png", dpi=150, bbox_inches="tight")
 plt.close()
 print("Saved 11_val.png")
 
+val_start = rng.randint(0, max(1, len(val_fe) - ONE_WEEK))
+val_slice = slice(val_start, val_start + ONE_WEEK)
+fig, ax = plt.subplots(figsize=(18, 5))
+plot_split_timeline(ax, val_fe.index[val_slice], val_fe[TARGET].values[val_slice], va_pred[val_slice],
+                    "LightGBM — Validation Set (1-Week Zoom)", True, True)
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%H:%M"))
+ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/11_val_zoom.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 11_val_zoom.png")
+
 # Test split
 fig, ax = plt.subplots(figsize=(18, 5))
 plot_split_timeline(ax, test_fe.index, test_fe[TARGET].values, te_pred,
@@ -719,6 +745,18 @@ plt.tight_layout()
 plt.savefig(f"{TARGET_DIR}/11_test.png", dpi=150, bbox_inches="tight")
 plt.close()
 print("Saved 11_test.png")
+
+test_start = rng.randint(0, max(1, len(test_fe) - ONE_WEEK))
+test_slice = slice(test_start, test_start + ONE_WEEK)
+fig, ax = plt.subplots(figsize=(18, 5))
+plot_split_timeline(ax, test_fe.index[test_slice], test_fe[TARGET].values[test_slice], te_pred[test_slice],
+                    "LightGBM — Test Set (1-Week Zoom)", True, True)
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%H:%M"))
+ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/11_test_zoom.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 11_test_zoom.png")
 
 # ============================================================
 # 5. FEATURE EXPANSION EXPERIMENT
