@@ -232,24 +232,49 @@ def reindex_fill(df_in, target_col=TARGET, train_cutoff_time=None, val_cutoff_ti
                         if c > best_score:
                             best_score, best_i = c, i
 
-            # STEP 4 & 5: Copy + scale
+            # STEP 4 & 5: Copy + Dynamic Scaling (Chống Nổ Hệ Số)
             if best_i is not None:
                 for col in [c for c in col_names if c not in DETERMINISTIC_COLS]:
-                    col_future = raw_arrays[col][best_i:best_i + chunk_len]    # always copy from REAL data
+                    col_future = raw_arrays[col][best_i:best_i + chunk_len]    
                     if len(col_future) == 0:
                         continue
-                    cur_valid = arrays[col][context_start:chunk_start]         # chains from the previous chunk
+                        
+                    cur_valid = arrays[col][context_start:chunk_start]         
                     mat_valid = raw_arrays[col][best_i - seasonal_window:best_i]
                     cur_valid = cur_valid[~np.isnan(cur_valid)]
                     mat_valid = mat_valid[~np.isnan(mat_valid)]
 
-                    if col == "temp":
-                        offset = (cur_valid.mean() - mat_valid.mean()) if len(cur_valid) and len(mat_valid) else 0.0
+                    if len(cur_valid) == 0 or len(mat_valid) == 0:
+                        arrays[col][chunk_positions] = col_future
+                        continue
+
+                    # Tính giá trị trung bình
+                    mu_cur = cur_valid.mean()
+                    mu_hist = mat_valid.mean()
+
+                    # 1. Các biến KHÔNG được phép Scale
+                    if col in ("rain_1h", "snow_1h"):
+                        arrays[col][chunk_positions] = col_future
+                        
+                    # 2. Additive Scaling (Nhiệt độ, Áp suất)
+                    elif col in ("temp", "pressure"):
+                        offset = mu_cur - mu_hist
+                        # Khóa trần offset để tránh lệch quá lố (VD: lệch tối đa 5 độ C)
+                        if col == "temp": offset = np.clip(offset, -5.0, 5.0)
                         arrays[col][chunk_positions] = col_future + offset
+                        
+                    # 3. Multiplicative Scaling (GHI, Wind Speed, Độ ẩm, Mây)
                     else:
-                        scale = (cur_valid.mean() / (mat_valid.mean() + 1e-6)) if len(cur_valid) and len(mat_valid) else 1.0
-                        if col in ("rain_1h", "snow_1h"):
+                        # Lớp bảo vệ 1: Ngưỡng chết (Dead-zone)
+                        # Nếu giá trị quá khứ quá nhỏ, hệ số nhân sẽ vô nghĩa -> Không scale
+                        if mu_hist < 1.0: 
                             scale = 1.0
+                        else:
+                            raw_scale = mu_cur / mu_hist
+                            # Lớp bảo vệ 2: Khóa biên độ (Hard Clipping)
+                            # Giới hạn tỷ lệ từ 0.3 (giảm ~3 lần) đến 3.0 (tăng gấp 3)
+                            scale = np.clip(raw_scale, 0.3, 3.0) 
+                            
                         arrays[col][chunk_positions] = col_future * scale
 
     for col in col_names:
