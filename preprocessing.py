@@ -8,6 +8,49 @@ from config import TARGET, TARGET_DIR
 np.random.seed(42)
 
 # ============================================================
+# 0. DUPLICATE HANDLER
+# ============================================================
+
+def handle_duplicates(df_in, time_col="Time", strategy="first"):
+    """Detect and handle duplicate timestamps.
+
+    Parameters
+    ----------
+    strategy : {"first", "last", "mean"}
+        How to resolve duplicate timestamps:
+        - "first"  : keep the first occurrence
+        - "last"   : keep the last occurrence
+        - "mean"   : average numeric columns, keep first for non-numeric
+
+    Returns (cleaned_df, report_dict).
+    """
+    d = df_in.copy()
+    report = {}
+
+    if time_col in d.columns:
+        t_dup = d[time_col].duplicated(keep=False)
+        n_time = t_dup.sum()
+        report["duplicate_timestamps"] = int(n_time)
+        if n_time:
+            if strategy == "mean":
+                numeric = d.select_dtypes(include=[np.number]).columns.tolist()
+                non_num = [c for c in d.columns if c not in numeric and c != time_col]
+                agg = {c: "mean" for c in numeric}
+                for c in non_num:
+                    agg[c] = "first"
+                d = d.groupby(time_col, as_index=False).agg(agg)
+            else:
+                d = d.drop_duplicates(subset=time_col, keep=strategy)
+            print(f"  Merged {n_time:,} duplicate timestamp(s) (strategy={strategy}).")
+    else:
+        report["duplicate_timestamps"] = 0
+
+    report["rows_before"] = len(df_in)
+    report["rows_after"] = len(d)
+    return d, report
+
+
+# ============================================================
 # 1. LOAD
 # ============================================================
 print("=" * 60)
@@ -235,9 +278,17 @@ def reindex_fill(df_in, target_col=TARGET, train_cutoff_time=None, val_cutoff_ti
 def run_preprocessing():
     """Load, gap-fill, split, clip, and engineer features. Returns (train_fe, val_fe, test_fe, train_pp, val_pp, test_pp)."""
     import pickle
+
+    global df
+
     n_raw = len(df)
     prov_train_end = df.iloc[int(n_raw * 0.70) - 1]["Time"]
     prov_val_end = df.iloc[int(n_raw * 0.85) - 1]["Time"]
+
+    # Handle duplicate timestamps before gap-fill
+    df, dup_report = handle_duplicates(df)
+    print(f"Duplicates: {dup_report['rows_before']:,} -> {dup_report['rows_after']:,} rows "
+          f"({dup_report['duplicate_timestamps']:,} timestamp dupes)")
 
     print(f"\nFilling gaps on full dataset ({len(df):,} rows)...")
     df_filled, full_missing = reindex_fill(
