@@ -291,8 +291,9 @@ for label, mtype in full_model_configs:
     fc_end = forecast_start + pd.Timedelta(hours=23, minutes=45)
     actual = test_pp.loc[forecast_start:fc_end, TARGET].values
     rmse_f = np.sqrt(mean_squared_error(actual, fct.clip(0)))
-    rel_f = (rmse_f / actual.mean()) * 100 if actual.mean() > 0 else 0
-    print(f"  {label} 24h RMSE={rmse_f:.1f} Wh, RelErr={rel_f:.2f}%")
+    rng_f = actual.max() - actual.min()
+    nrmse_f = (rmse_f / rng_f * 100) if rng_f > 0 else 0
+    print(f"  {label} 24h RMSE={rmse_f:.1f} Wh, nRMSE={nrmse_f:.2f}%")
 
 # Walk-forward evaluation on nowcast models
 print("\n--- Walk-Forward Evaluation (nowcast, n=30 windows) ---")
@@ -318,8 +319,9 @@ fct_fc = forecast_24h(lgb_fc, None, FORECAST_FEATURE_SET, test_pp, train_pp,
                       forecast_start, use_climatology=True)
 actual_fc = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
 rmse_fc = np.sqrt(mean_squared_error(actual_fc, fct_fc.clip(0)))
-rel_fc = (rmse_fc / actual_fc.mean()) * 100
-print(f"\n  Forecast Model 24h RMSE={rmse_fc:.1f} Wh, RelErr={rel_fc:.2f}% (climatology)")
+rng_fc = actual_fc.max() - actual_fc.min()
+nrmse_fc = (rmse_fc / rng_fc * 100) if rng_fc > 0 else 0
+print(f"\n  Forecast Model 24h RMSE={rmse_fc:.1f} Wh, nRMSE={nrmse_fc:.2f}% (climatology)")
 
 # Walk-forward on forecast model (Issue 7)
 print("\n--- Walk-Forward Evaluation (forecast model, n=50 windows) ---")
@@ -756,8 +758,9 @@ fct_exp = forecast_24h(lgb_exp, None, EXPANDED_FEATURES, test_pp, train_pp,
                        forecast_start)
 actual_96_exp = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
 rmse_f_exp = np.sqrt(mean_squared_error(actual_96_exp, fct_exp.clip(0)))
-rel_f_exp = (rmse_f_exp / actual_96_exp.mean()) * 100
-print(f"  24h RMSE={rmse_f_exp:.1f} Wh, RelErr={rel_f_exp:.2f}%")
+rng_f_exp = actual_96_exp.max() - actual_96_exp.min()
+nrmse_f_exp = (rmse_f_exp / rng_f_exp * 100) if rng_f_exp > 0 else 0
+print(f"  24h RMSE={rmse_f_exp:.1f} Wh, nRMSE={nrmse_f_exp:.2f}%")
 
 # 24h on val
 val_fc_start = val_fe.index[0]
@@ -788,10 +791,15 @@ for name, vva, eva, tva, eta in [
     print(f"{name:<22} {vva:<16} {eva:<16} {tva:<16} {eta:<16}")
 
 baseline_fct = forecasts_nc.get(baseline_label)
-baseline_fct_rel = (np.sqrt(mean_squared_error(actual_96_exp, baseline_fct.clip(0))) /
-                    actual_96_exp.mean() * 100) if baseline_fct is not None else 0
-print(f"{'24h Forecast RelErr (Test)':<22} {baseline_fct_rel:<16.2f} {rel_f_exp:<16.2f}")
-print(f"{'24h Forecast RelErr (Val)':<22} {'':<16} {rel_f_exp_val:<16.2f}")
+if baseline_fct is not None:
+    baseline_rmse = np.sqrt(mean_squared_error(actual_96_exp, baseline_fct.clip(0)))
+    baseline_nrmse = (baseline_rmse / (actual_96_exp.max() - actual_96_exp.min()) * 100) if actual_96_exp.max() > actual_96_exp.min() else 0
+else:
+    baseline_nrmse = 0
+rng_exp_val = actual_96_val.max() - actual_96_val.min()
+nrmse_f_exp_val = (rmse_f_exp_val / rng_exp_val * 100) if rng_exp_val > 0 else 0
+print(f"{'24h Forecast nRMSE (Test)':<22} {baseline_nrmse:<16.2f} {nrmse_f_exp:<16.2f}")
+print(f"{'24h Forecast nRMSE (Val)':<22} {'':<16} {nrmse_f_exp_val:<16.2f}")
 
 exp_imp = pd.Series(lgb_exp.feature_importances_, index=EXPANDED_FEATURES).sort_values(ascending=False)
 print(f"\nTop 10 features (expanded):")
@@ -879,9 +887,10 @@ for ghi_thresh in [25, 50, 100]:
     rmse_va = np.sqrt(mean_squared_error(val_d[TARGET].values, pred_va)) if len(pred_va) > 0 else float("nan")
     pred_te = m.predict(te_d[DAYTIME_FEATURES_LOCAL].values).clip(0)
     rmse_te = np.sqrt(mean_squared_error(te_d[TARGET].values, pred_te))
-    rel_te  = rmse_te / te_d[TARGET].values.mean() * 100
+    rng_te = te_d[TARGET].values.max() - te_d[TARGET].values.min()
+    nrmse_te = (rmse_te / rng_te * 100) if rng_te > 0 else 0
     print(f"  GHI > {ghi_thresh:<3}: TrainR²={r2_tr:.4f}  ValRMSE={rmse_va:.0f} Wh  "
-          f"TestRMSE={rmse_te:.0f} Wh  RelErr={rel_te:.2f}%"
+          f"TestRMSE={rmse_te:.0f} Wh  nRMSE={nrmse_te:.2f}%"
           f"{'  ⚠ overfit' if r2_tr > 0.98 and rmse_va > rmse_te * 1.3 else ''}")
 
 # ============================================================
@@ -915,7 +924,7 @@ print(f"  Final Model Val Daytime nRMSE = {f_val_daytime_nrmse:.2f}%")
 print(f"  Final Model Test Daytime nRMSE = {f_test_daytime_nrmse:.2f}%")
 
 # GHI threshold sweep
-print(f"\n{'GHI >':<8} {'Rows':>8} {'Mean[Wh]':>10} {'RMSE[Wh]':>10} {'RelErr%':>8} {'R²':>7}")
+print(f"\n{'GHI >':<8} {'Rows':>8} {'Mean[Wh]':>10} {'RMSE[Wh]':>10} {'nRMSE%':>8} {'R²':>7}")
 print("-" * 60)
 for ghi_thresh in [0, 25, 50, 100, 150, 200]:
     mask_tr = train_fe["GHI"] > ghi_thresh
@@ -935,9 +944,10 @@ for ghi_thresh in [0, 25, 50, 100, 150, 200]:
     rmse_va  = np.sqrt(mean_squared_error(va_d[TARGET].values, pred_va)) if len(pred_va) > 0 else float("nan")
     pred_te  = m.predict(te_d[FINAL_FEATURES].values).clip(0)
     rmse_te  = np.sqrt(mean_squared_error(te_d[TARGET].values, pred_te))
-    rel_te   = rmse_te / te_d[TARGET].values.mean() * 100
+    rng_te = te_d[TARGET].values.max() - te_d[TARGET].values.min()
+    nrmse_te = (rmse_te / rng_te * 100) if rng_te > 0 else 0
     print(f"{f'GHI > {ghi_thresh}':<8} {len(te_d):>8} {te_d[TARGET].values.mean():>10.0f} "
-          f"TrainR²={r2_tr:.4f}  ValRMSE={rmse_va:>7.1f}  TestRMSE={rmse_te:>7.1f}  RelErr={rel_te:.2f}%"
+          f"TrainR²={r2_tr:.4f}  ValRMSE={rmse_va:>7.1f}  TestRMSE={rmse_te:>7.1f}  nRMSE={nrmse_te:.2f}%"
           f"{'  ⚠ overfit' if r2_tr > 0.98 and not np.isnan(rmse_va) and rmse_va > rmse_te * 1.3 else ''}")
 
 # Feature importance
@@ -951,8 +961,9 @@ fct_f = forecast_24h(final_model, None, FINAL_FEATURES, test_pp, train_pp,
                      forecast_start, use_climatology=True)
 actual_96f = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
 rmse_f_f = np.sqrt(mean_squared_error(actual_96f, fct_f.clip(0)))
-rel_f_f = (rmse_f_f / actual_96f.mean()) * 100
-print(f"  24h RMSE={rmse_f_f:.1f} Wh, RelErr={rel_f_f:.2f}%")
+rng_f_f = actual_96f.max() - actual_96f.min()
+nrmse_f_f = (rmse_f_f / rng_f_f * 100) if rng_f_f > 0 else 0
+print(f"  24h RMSE={rmse_f_f:.1f} Wh, nRMSE={nrmse_f_f:.2f}%")
 
 # ============================================================
 # 8. FINAL SUMMARY

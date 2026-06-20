@@ -12,7 +12,11 @@ np.random.seed(42)
 # ============================================================
 
 def handle_duplicates(df_in, time_col="Time", strategy="first"):
-    """Detect and handle duplicate timestamps.
+    """Detect and handle duplicate rows.
+
+    Checks for:
+      1. Fully duplicate rows (all columns identical)
+      2. Duplicate timestamps (same Time value, possibly different other columns)
 
     Parameters
     ----------
@@ -20,20 +24,46 @@ def handle_duplicates(df_in, time_col="Time", strategy="first"):
         How to resolve duplicate timestamps:
         - "first"  : keep the first occurrence
         - "last"   : keep the last occurrence
-        - "mean"   : average numeric columns, keep first for non-numeric
+        - "mean"   : average numeric columns (excluding categorical-coded ones),
+                     keep first for non-numeric / categorical columns
 
     Returns (cleaned_df, report_dict).
     """
     d = df_in.copy()
     report = {}
 
+    # --- NaT timestamps: report separately, never mix into duplicate logic ---
+    if time_col in d.columns:
+        n_nat = d[time_col].isna().sum()
+        report["nat_timestamps"] = int(n_nat)
+        if n_nat > 0:
+            print(f"  WARNING: {n_nat:,} row(s) have an invalid/missing {time_col} (NaT) — "
+                  f"inspect separately; duplicated() would treat them as 'duplicates of each other'.")
+
+    # --- Full-row duplicates ---
+    full_dup = d.duplicated(keep=False)
+    report["full_duplicate_rows_flagged"] = int(full_dup.sum())
+    if full_dup.any():
+        n_before = len(d)
+        d = d.drop_duplicates(keep=strategy if strategy != "mean" else "first")
+        n_removed = n_before - len(d)
+        report["full_duplicate_rows_removed"] = n_removed
+        print(f"  Removed {n_removed:,} fully duplicate row(s) (kept={strategy}).")
+    else:
+        report["full_duplicate_rows_removed"] = 0
+
+    # --- Duplicate timestamps ---
     if time_col in d.columns:
         t_dup = d[time_col].duplicated(keep=False)
-        n_time = t_dup.sum()
-        report["duplicate_timestamps"] = int(n_time)
-        if n_time:
+        report["duplicate_timestamps_flagged"] = int(t_dup.sum())
+        if t_dup.any():
+            n_before = len(d)
             if strategy == "mean":
+                # Cột mã hoá categorical (dù dtype là số) -- KHÔNG được lấy trung bình,
+                # vì trung bình 2 mã phân loại tạo ra giá trị vô nghĩa (vd weather_type=3.5)
+                CATEGORICAL_COLS = {"weather_type", "isSun", "hour", "month"}
                 numeric = d.select_dtypes(include=[np.number]).columns.tolist()
+                numeric = [c for c in numeric if c not in CATEGORICAL_COLS]
                 non_num = [c for c in d.columns if c not in numeric and c != time_col]
                 agg = {c: "mean" for c in numeric}
                 for c in non_num:
@@ -41,9 +71,17 @@ def handle_duplicates(df_in, time_col="Time", strategy="first"):
                 d = d.groupby(time_col, as_index=False).agg(agg)
             else:
                 d = d.drop_duplicates(subset=time_col, keep=strategy)
-            print(f"  Merged {n_time:,} duplicate timestamp(s) (strategy={strategy}).")
+            n_removed = n_before - len(d)
+            report["duplicate_timestamps_removed"] = n_removed
+            print(f"  Merged {n_removed:,} duplicate-timestamp row(s) (strategy={strategy}).")
+        else:
+            report["duplicate_timestamps_removed"] = 0
+
+        # Đảm bảo thứ tự đầu ra NHẤT QUÁN bất kể strategy nào được dùng
+        # (groupby tự sort theo time_col, còn drop_duplicates giữ thứ tự gốc -- không đồng nhất nếu thiếu dòng này)
+        d = d.sort_values(time_col).reset_index(drop=True)
     else:
-        report["duplicate_timestamps"] = 0
+        report["duplicate_timestamps_removed"] = 0
 
     report["rows_before"] = len(df_in)
     report["rows_after"] = len(d)
@@ -60,24 +98,7 @@ print("=" * 60)
 df = pd.read_csv("data/Renewable.csv")
 df["Time"] = pd.to_datetime(df["Time"])
 df = df.sort_values("Time").reset_index(drop=True)
-# ============================================================
-# 1b. DETECT "SOFT" MISSING DATA: Energy=0 kéo dài bất thường khi GHI đủ cao
-# Không phải NaN nên gap-detection hiện tại bỏ sót -- gắn lại thành NaN để xử lý chung
-# ============================================================
-GHI_ANOMALY_THRESHOLD = 40   # W/m² -- cao hơn hẳn dead-zone thật (median ~3.5, p75 ~9)
-MIN_ANOMALY_RUN = 4           # >= 1 giờ liên tục (4 bước 15 phút)
 
-is_anomalous_zero = (df[TARGET] == 0) & (df["GHI"] > GHI_ANOMALY_THRESHOLD)
-run_id = is_anomalous_zero.ne(is_anomalous_zero.shift()).cumsum()
-run_lengths = is_anomalous_zero.groupby(run_id).transform("sum")
-flag_as_missing = is_anomalous_zero & (run_lengths >= MIN_ANOMALY_RUN)
-
-n_flagged = flag_as_missing.sum()
-if n_flagged > 0:
-    print(f"Detected {n_flagged:,} anomalous Energy=0 rows "
-          f"(GHI>{GHI_ANOMALY_THRESHOLD}, run >={MIN_ANOMALY_RUN} steps) "
-          f"-- reassigned to NaN for gap-fill")
-    df.loc[flag_as_missing, TARGET] = np.nan
 # ============================================================
 # 2a. HISTORICAL PATTERN-BASED RECONSTRUCTION (Gap Fill — chunking version)
 # ============================================================
@@ -279,16 +300,35 @@ def run_preprocessing():
     """Load, gap-fill, split, clip, and engineer features. Returns (train_fe, val_fe, test_fe, train_pp, val_pp, test_pp)."""
     import pickle
 
+    # Handle duplicates     
     global df
+    df, dup_report = handle_duplicates(df)
+    print(f"Duplicates handled: {dup_report['rows_before']:,} -> {dup_report['rows_after']:,} rows "
+          f"({dup_report['full_duplicate_rows_removed']:,} full dupes removed, "
+          f"{dup_report['duplicate_timestamps_removed']:,} timestamp dupes removed)")
+    
+    # ============================================================
+    # # 1b. DETECT "SOFT" MISSING DATA: Energy=0 kéo dài bất thường khi GHI đủ cao
+    # # Không phải NaN nên gap-detection hiện tại bỏ sót -- gắn lại thành NaN để xử lý chung
+    # # ============================================================
+    GHI_ANOMALY_THRESHOLD = 30   # W/m² -- cao hơn hẳn dead-zone thật (median ~3.5, p75 ~9)
+    MIN_ANOMALY_RUN = 4           # >= 1 giờ liên tục (4 bước 15 phút)
+
+    is_anomalous_zero = (df[TARGET] == 0) & (df["GHI"] > GHI_ANOMALY_THRESHOLD)
+    run_id = is_anomalous_zero.ne(is_anomalous_zero.shift()).cumsum()
+    run_lengths = is_anomalous_zero.groupby(run_id).transform("sum")
+    flag_as_missing = is_anomalous_zero & (run_lengths >= MIN_ANOMALY_RUN)
+
+    n_flagged = flag_as_missing.sum()
+    if n_flagged > 0:
+        print(f"Detected {n_flagged:,} anomalous Energy=0 rows "
+              f"(GHI>{GHI_ANOMALY_THRESHOLD}, run >={MIN_ANOMALY_RUN} steps) "
+              f"-- reassigned to NaN for gap-fill")
+        df.loc[flag_as_missing, TARGET] = np.nan
 
     n_raw = len(df)
     prov_train_end = df.iloc[int(n_raw * 0.70) - 1]["Time"]
     prov_val_end = df.iloc[int(n_raw * 0.85) - 1]["Time"]
-
-    # Handle duplicate timestamps before gap-fill
-    df, dup_report = handle_duplicates(df)
-    print(f"Duplicates: {dup_report['rows_before']:,} -> {dup_report['rows_after']:,} rows "
-          f"({dup_report['duplicate_timestamps']:,} timestamp dupes)")
 
     print(f"\nFilling gaps on full dataset ({len(df):,} rows)...")
     df_filled, full_missing = reindex_fill(
