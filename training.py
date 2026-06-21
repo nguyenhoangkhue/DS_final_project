@@ -92,7 +92,7 @@ def train_model(train_fe, feature_list, model_type="linear", label=""):
     elif model_type == "xgboost":
         scaler = None
         X_tr = X_train.copy()
-        model = xgb.XGBRegressor(n_estimators=200, max_depth=6, min_samples_leaf=5,
+        model = xgb.XGBRegressor(n_estimators=200, max_depth=6, min_child_weight=5,
                                   random_state=42, n_jobs=-1, verbosity=0)
     elif model_type == "mlp":
         scaler = StandardScaler()
