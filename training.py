@@ -200,9 +200,31 @@ with open("data/best_params.json", "w") as f:
     json.dump(lgb_study.best_params, f, indent=2)
     print(f"  Saved best params to data/best_params.json")
 
-print("\n--- Tuning LightGBM for FINAL_FEATURES ---")
 X_tr_fin = train_fe[FINAL_FEATURES].values
 y_tr_fin = train_fe[TARGET].values
+
+print("\n--- LightGBM with FINAL_FEATURES (default params) ---")
+lgb_fin_default = lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
+lgb_fin_default.fit(X_tr_fin, y_tr_fin)
+models["LightGBM (final)"] = lgb_fin_default
+scalers["LightGBM (final)"] = None
+y_tr_pred_fin = lgb_fin_default.predict(X_tr_fin).clip(0)
+tr_m_fin = compute_metrics(train_fe[TARGET].values, y_tr_pred_fin, "  LightGBM (final) (Train)")
+X_va_fin = val_fe[FINAL_FEATURES].values
+y_va_pred_fin = lgb_fin_default.predict(X_va_fin).clip(0)
+va_m_fin = compute_metrics(val_fe[TARGET].values, y_va_pred_fin, "  LightGBM (final) (Val)")
+va_dnrmse_fin = compute_daytime_nrmse(val_fe[TARGET].values, y_va_pred_fin, val_fe["GHI"].values)
+print(f"  LightGBM (final) Val Daytime nRMSE = {va_dnrmse_fin:.2f}%")
+X_te_fin = test_fe[FINAL_FEATURES].values
+y_te_pred_fin = lgb_fin_default.predict(X_te_fin).clip(0)
+te_m_fin = compute_metrics(test_fe[TARGET].values, y_te_pred_fin, "  LightGBM (final) (Test)")
+te_dnrmse_fin = compute_daytime_nrmse(test_fe[TARGET].values, y_te_pred_fin, test_fe["GHI"].values)
+print(f"  LightGBM (final) Test Daytime nRMSE = {te_dnrmse_fin:.2f}%")
+results["LightGBM (final)"] = {"train": tr_m_fin, "val": va_m_fin, "test": te_m_fin,
+                                "val_daytime_nrmse": va_dnrmse_fin, "test_daytime_nrmse": te_dnrmse_fin}
+importance_dfs["LightGBM (final)"] = compute_importance(lgb_fin_default, None, FINAL_FEATURES, train_fe, "lightgbm")
+
+print("\n--- Tuning LightGBM for FINAL_FEATURES ---")
 
 def lgb_objective_final(trial):
     params = {
@@ -237,7 +259,7 @@ with open("data/best_params_final.json", "w") as f:
     json.dump(lgb_study_fin.best_params, f, indent=2)
     print(f"  Saved best params to data/best_params_final.json")
 
-print("\n--- Retraining LightGBM (tuned) ---")
+print("\n--- Retraining LightGBM (tuned on TOP5) ---")
 best_lgb = lgb.LGBMRegressor(**lgb_study.best_params, random_state=42, n_jobs=-1, verbose=-1)
 best_lgb.fit(X_tr_all, y_tr_all)
 models["LightGBM (tuned)"] = best_lgb
@@ -254,7 +276,31 @@ results["LightGBM (tuned)"] = {"train": tr_m, "val": va_m,
                                 "val_daytime_nrmse": va_dnrmse}
 importance_dfs["LightGBM (tuned)"] = compute_importance(best_lgb, None, FEATURE_SET, train_fe, "lightgbm")
 
-full_model_configs = MODEL_CONFIGS + [("LightGBM (tuned)", "lightgbm_tuned")]
+print("\n--- Retraining LightGBM (final, tuned on FINAL_FEATURES) ---")
+best_lgb_fin = lgb.LGBMRegressor(**lgb_study_fin.best_params, random_state=42, n_jobs=-1, verbose=-1)
+best_lgb_fin.fit(X_tr_fin, y_tr_fin)
+models["LightGBM (final tuned)"] = best_lgb_fin
+scalers["LightGBM (final tuned)"] = None
+
+y_tr_pred_ft = best_lgb_fin.predict(X_tr_fin).clip(0)
+tr_m_ft = compute_metrics(train_fe[TARGET].values, y_tr_pred_ft, "  LightGBM (final tuned) (Train)")
+X_va_ft = val_fe[FINAL_FEATURES].values
+y_va_pred_ft = best_lgb_fin.predict(X_va_ft).clip(0)
+va_m_ft = compute_metrics(val_fe[TARGET].values, y_va_pred_ft, "  LightGBM (final tuned) (Val)")
+va_dnrmse_ft = compute_daytime_nrmse(val_fe[TARGET].values, y_va_pred_ft, val_fe["GHI"].values)
+print(f"  LightGBM (final tuned) Val Daytime nRMSE = {va_dnrmse_ft:.2f}%")
+X_te_ft = test_fe[FINAL_FEATURES].values
+y_te_pred_ft = best_lgb_fin.predict(X_te_ft).clip(0)
+te_m_ft = compute_metrics(test_fe[TARGET].values, y_te_pred_ft, "  LightGBM (final tuned) (Test)")
+te_dnrmse_ft = compute_daytime_nrmse(test_fe[TARGET].values, y_te_pred_ft, test_fe["GHI"].values)
+print(f"  LightGBM (final tuned) Test Daytime nRMSE = {te_dnrmse_ft:.2f}%")
+results["LightGBM (final tuned)"] = {"train": tr_m_ft, "val": va_m_ft, "test": te_m_ft,
+                                      "val_daytime_nrmse": va_dnrmse_ft, "test_daytime_nrmse": te_dnrmse_ft}
+importance_dfs["LightGBM (final tuned)"] = compute_importance(best_lgb_fin, None, FINAL_FEATURES, train_fe, "lightgbm")
+
+full_model_configs = MODEL_CONFIGS + [("LightGBM (tuned)", "lightgbm_tuned"),
+                                       ("LightGBM (final)", "lightgbm_default"),
+                                       ("LightGBM (final tuned)", "lightgbm_final_tuned")]
 
 for label, mtype in full_model_configs:
     print(f"\n{label} - Feature Importance:")
@@ -331,6 +377,7 @@ model_data = {
     "results": {k: v for k, v in results.items()},
     "full_model_configs": full_model_configs,
     "FEATURE_SET": FEATURE_SET,
+    "FINAL_FEATURES": FINAL_FEATURES,
 }
 with open("data/models.pkl", "wb") as f:
     pickle.dump(model_data, f)

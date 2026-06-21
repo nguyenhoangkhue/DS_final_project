@@ -54,8 +54,9 @@ MODEL_COLORS = {
     "LightGBM":          "#E06B22",
     "XGBoost":           "#7B287D",
     "MLP":               "#E05252",
-    "LightGBM (tuned)":  "#D4833A",
-    "MLP (tuned)":       "#C04040",
+    "LightGBM (tuned)":       "#D4833A",
+    "LightGBM (final)":       "#2E86AB",
+    "LightGBM (final tuned)": "#1A5276",
     "Forecast LGB":      "#2E86AB",
 }
 

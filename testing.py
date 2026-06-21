@@ -83,21 +83,24 @@ def compute_daytime_nrmse(y_true, y_pred, ghi_values):
     rng_d = y_d.max() - y_d.min()
     return (rmse_d / rng_d * 100) if rng_d > 0 else 0.0
 
+FINAL_FEATURES = mdata.get("FINAL_FEATURES", EXPANDED_FEATURES)
+
 results = {}
 for label in models:
-    X_tr = train_fe[FEATURE_SET].values
+    feat_set = FINAL_FEATURES if "final" in label else FEATURE_SET
+    X_tr = train_fe[feat_set].values
     if scalers[label] is not None:
         X_tr = scalers[label].transform(X_tr)
     y_tr_pred = models[label].predict(X_tr).clip(0)
     tr_m = compute_metrics(train_fe[TARGET].values, y_tr_pred)
 
-    X_va = val_fe[FEATURE_SET].values
+    X_va = val_fe[feat_set].values
     if scalers[label] is not None:
         X_va = scalers[label].transform(X_va)
     y_va_pred = models[label].predict(X_va).clip(0)
     va_m = compute_metrics(val_fe[TARGET].values, y_va_pred)
 
-    X_te = test_fe[FEATURE_SET].values
+    X_te = test_fe[feat_set].values
     if scalers[label] is not None:
         X_te = scalers[label].transform(X_te)
     y_te_pred = models[label].predict(X_te).clip(0)
@@ -280,11 +283,15 @@ best_day_start_fe = int(test_fe.index.searchsorted(best_day))
 forecast_start = test_fe.index[best_day_start_fe]
 print(f"Representative forecast day: {forecast_start.date()} (median-energy day)")
 
+def model_feature_set(label):
+    return FINAL_FEATURES if "final" in label else FEATURE_SET
+
 # --- Nowcast rollout (uses real weather — reveals weather leakage baseline) ---
 print("\n--- 24h Rollout with NOWCAST (observed weather, reference) ---")
 forecasts_nc = {}
 for label, mtype in full_model_configs:
-    fct = forecast_24h(models[label], scalers[label], FEATURE_SET, test_pp, train_pp,
+    fs = model_feature_set(label)
+    fct = forecast_24h(models[label], scalers[label], fs, test_pp, train_pp,
                        forecast_start, use_climatology=False)
     forecasts_nc[label] = fct
     fc_end = forecast_start + pd.Timedelta(hours=23, minutes=45)
@@ -297,8 +304,9 @@ for label, mtype in full_model_configs:
 # Walk-forward evaluation on nowcast models
 print("\n--- Walk-Forward Evaluation (nowcast, n=30 windows) ---")
 for label, mtype in full_model_configs:
+    fs = model_feature_set(label)
     rmse_by_step, overall_rmse, nw = evaluate_by_horizon(
-        models[label], scalers[label], FEATURE_SET, test_pp, train_pp,
+        models[label], scalers[label], fs, test_pp, train_pp,
         n_windows=30, use_climatology=False)
     print(f"  {label:<22} avg 24h RMSE={overall_rmse:.1f} Wh ({nw} windows)")
 
@@ -460,82 +468,6 @@ plt.savefig(f"{TARGET_DIR}/05_forecast_vs_actual.png", dpi=150, bbox_inches="tig
 plt.close()
 print("Saved 05_forecast_vs_actual.png")
 
-# Figure 06: Residual analysis (best model by val R²)
-best_label = max(results, key=lambda k: results[k]["val"]["r2"])
-X_te_best = test_fe[FEATURE_SET].values
-if scalers[best_label] is not None:
-    X_te_best = scalers[best_label].transform(X_te_best)
-y_test_pred_best = models[best_label].predict(X_te_best).clip(0)
-residuals_best = test_fe[TARGET].values - y_test_pred_best
-
-fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-axes[0].scatter(y_test_pred_best, residuals_best, alpha=0.3, s=1, color=MODEL_COLORS[best_label])
-axes[0].axhline(0, color=REF_RED, linestyle="-", linewidth=1)
-axes[0].set_xlabel("Predicted [Wh]")
-axes[0].set_ylabel("Residual [Wh]")
-axes[0].set_title("Predicted vs Residual", fontsize=12, fontweight="bold")
-axes[1].hist(residuals_best, bins=80, color=MODEL_COLORS[best_label], edgecolor="white", alpha=0.8)
-axes[1].set_xlabel("Residual [Wh]")
-axes[1].set_ylabel("Frequency")
-axes[1].set_title("Residual Distribution", fontsize=12, fontweight="bold")
-stats.probplot(residuals_best, dist="norm", plot=axes[2])
-axes[2].set_title("Q-Q Plot (Normal)", fontsize=12, fontweight="bold")
-plt.tight_layout()
-plt.savefig(f"{TARGET_DIR}/06_residuals.png", dpi=150, bbox_inches="tight")
-plt.close()
-print("Saved 06_residuals.png")
-
-# Figure 07: Feature importance
-n_models_f7 = len(full_model_configs)
-n_cols_f7 = 3
-n_rows_f7 = int(np.ceil(n_models_f7 / n_cols_f7))
-fig, axes = plt.subplots(n_rows_f7, n_cols_f7, figsize=(6 * n_cols_f7, 4 * n_rows_f7))
-axes = np.atleast_1d(axes).ravel()
-for i, (label, mtype) in enumerate(full_model_configs):
-    ax = axes[i]
-    imp = importance_dfs[label]
-    c = [MODEL_COLORS[label] if v > imp.iloc[0] * 0.15 else "#CCCCCC" for v in imp.values]
-    ax.barh(range(len(imp)), imp.values[::-1], color=c[::-1], edgecolor="white")
-    ax.set_yticks(range(len(imp)))
-    ax.set_yticklabels(imp.index[::-1], fontsize=9)
-    ax.set_title(f"{label} — Feature Importance", fontsize=12, fontweight="bold")
-    xlabel = "|β_std|" if mtype == "linear" else "Importance"
-    ax.set_xlabel(xlabel)
-    ax.invert_yaxis()
-for j in range(i + 1, len(axes)):
-    axes[j].set_visible(False)
-plt.tight_layout()
-plt.savefig(f"{TARGET_DIR}/07_feature_importance.png", dpi=150, bbox_inches="tight")
-plt.close()
-print("Saved 07_feature_importance.png")
-
-# Figure 08: 2-week time series
-n_cols_f8 = 2
-n_rows_f8 = int(np.ceil(n_models_f7 / n_cols_f8))
-fig, axes = plt.subplots(n_rows_f8, n_cols_f8, figsize=(8 * n_cols_f8, 4 * n_rows_f8), sharex=True)
-axes = np.atleast_1d(axes).ravel()
-n_steps = 96 * 14
-time_2w = test_fe.index[:n_steps]
-for i, (label, mtype) in enumerate(full_model_configs):
-    ax = axes[i]
-    actual_2w = test_fe[TARGET].iloc[:n_steps].values
-    X_2w = test_fe.iloc[:n_steps][FEATURE_SET].values
-    if scalers[label] is not None:
-        X_2w = scalers[label].transform(X_2w)
-    pred_2w = models[label].predict(X_2w).clip(0)
-    ax.plot(time_2w, actual_2w, color="black", linewidth=0.5, label="Actual")
-    ax.plot(time_2w, pred_2w, color=MODEL_COLORS[label], linewidth=0.6, linestyle="--", label="Predicted")
-    ax.set_title(f"{label} — First 14 Days of Test Set", fontsize=11, fontweight="bold")
-    ax.set_ylabel("Energy delta [Wh]")
-    ax.legend(fontsize=8)
-for j in range(i + 1, len(axes)):
-    axes[j].set_visible(False)
-axes[-1].set_xlabel("Time")
-plt.tight_layout()
-plt.savefig(f"{TARGET_DIR}/08_2week_forecast.png", dpi=150, bbox_inches="tight")
-plt.close()
-print("Saved 08_2week_forecast.png")
-
 # Figure 09: Full results dashboard
 from matplotlib.gridspec import GridSpec
 
@@ -575,15 +507,19 @@ ax3 = fig.add_subplot(gs[1, :])
 actual_96 = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
 ax3.plot(time_idx, actual_96, color="black", linewidth=1.5, label="Actual")
 for label, mtype in full_model_configs:
-    ax3.plot(time_idx, forecasts_nc[label], color=MODEL_COLORS[label], linewidth=1.0, linestyle="--", label=label)
+    if label in forecasts_nc:
+        ax3.plot(time_idx, forecasts_nc[label], color=MODEL_COLORS[label], linewidth=1.0, linestyle="--", label=label)
 ax3.set_title(f"24-Hour Forecast — {forecast_start.date()}", fontweight="bold")
 ax3.set_ylabel("Energy delta [Wh]")
 ax3.legend()
 ax3.set_ylim(bottom=0)
 
+n_steps = 96 * 14
+time_2w = test_fe.index[:n_steps]
+
 ax4 = fig.add_subplot(gs[2, 0])
 actual_2w_best = test_fe[TARGET].iloc[:n_steps].values
-X_2w_best = test_fe.iloc[:n_steps][FEATURE_SET].values
+X_2w_best = test_fe.iloc[:n_steps][model_feature_set(best_label)].values
 if scalers[best_label] is not None:
     X_2w_best = scalers[best_label].transform(X_2w_best)
 pred_2w_best = models[best_label].predict(X_2w_best).clip(0)
@@ -605,7 +541,7 @@ ax5.set_xlabel(xlabel_best)
 ax5.invert_yaxis()
 
 ax6 = fig.add_subplot(gs[3, 0])
-X_te_best6 = test_fe[FEATURE_SET].values
+X_te_best6 = test_fe[model_feature_set(best_label)].values
 if scalers[best_label] is not None:
     X_te_best6 = scalers[best_label].transform(X_te_best6)
 y_pred_best6 = models[best_label].predict(X_te_best6).clip(0)
