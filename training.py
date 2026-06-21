@@ -144,8 +144,7 @@ def compute_importance(model, scaler, feature_list, train_fe, model_type="linear
         return pd.Series(model.feature_importances_, index=feature_list).sort_values(ascending=False)
     else:
         from sklearn.inspection import permutation_importance
-        # Lấy mẫu NGẪU NHIÊN (không phải 5000 dòng đầu theo thời gian) để đại diện cho
-        # toàn bộ phân phối train, tránh thiên lệch theo mùa
+        # Lấy mẫu NGẪU NHIÊN (không phải 5000 dòng đầu theo thời gian) để đại diện cho toàn bộ phân phối train, tránh thiên lệch theo mùa
         sample_size = min(5000, len(train_fe))
         sample_idx = np.random.RandomState(42).choice(len(train_fe), size=sample_size, replace=False)
         X_tmp = train_fe[feature_list].values[sample_idx]
