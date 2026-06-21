@@ -15,7 +15,7 @@ import lightgbm as lgb
 import xgboost as xgb
 import optuna
 
-from config import TARGET, TOP5_FEATURES, FINAL_FEATURES, MODEL_CONFIGS
+from config import TARGET, TOP5_FEATURES, EXPANDED_FEATURES, MODEL_CONFIGS
 
 np.random.seed(42)
 random.seed(42)
@@ -33,14 +33,11 @@ print("=" * 60)
 
 train_fe = pd.read_pickle("data/train_fe.pkl")
 val_fe = pd.read_pickle("data/val_fe.pkl")
-test_fe = pd.read_pickle("data/test_fe.pkl")
 train_pp = pd.read_pickle("data/train_pp.pkl")
 val_pp = pd.read_pickle("data/val_pp.pkl")
-test_pp = pd.read_pickle("data/test_pp.pkl")
 
 print(f"Train FE: {len(train_fe):,} rows")
 print(f"Val FE:   {len(val_fe):,} rows")
-print(f"Test FE:  {len(test_fe):,} rows")
 
 def compute_metrics(y_true, y_pred, label=""):
     y_pred = y_pred.clip(0)
@@ -130,10 +127,6 @@ for label, mtype in MODEL_CONFIGS:
     results[label] = {"train": train_metrics, "val": val_metrics,
                        "val_daytime_nrmse": val_daytime_nrmse}
 
-print("\n" + "=" * 60)
-print("FEATURE IMPORTANCE (baseline)")
-print("=" * 60)
-
 def compute_importance(model, scaler, feature_list, train_fe, model_type="linear", target_col=TARGET):
     if model_type == "linear" and hasattr(model, "coef_"):
         std_y = train_fe[target_col].std()
@@ -200,31 +193,26 @@ with open("data/best_params.json", "w") as f:
     json.dump(lgb_study.best_params, f, indent=2)
     print(f"  Saved best params to data/best_params.json")
 
-X_tr_fin = train_fe[FINAL_FEATURES].values
+X_tr_fin = train_fe[EXPANDED_FEATURES].values
 y_tr_fin = train_fe[TARGET].values
 
-print("\n--- LightGBM with FINAL_FEATURES (default params) ---")
+print("\n--- LightGBM with EXPANDED_FEATURES (default params) ---")
 lgb_fin_default = lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
 lgb_fin_default.fit(X_tr_fin, y_tr_fin)
 models["LightGBM (final)"] = lgb_fin_default
 scalers["LightGBM (final)"] = None
 y_tr_pred_fin = lgb_fin_default.predict(X_tr_fin).clip(0)
 tr_m_fin = compute_metrics(train_fe[TARGET].values, y_tr_pred_fin, "  LightGBM (final) (Train)")
-X_va_fin = val_fe[FINAL_FEATURES].values
+X_va_fin = val_fe[EXPANDED_FEATURES].values
 y_va_pred_fin = lgb_fin_default.predict(X_va_fin).clip(0)
 va_m_fin = compute_metrics(val_fe[TARGET].values, y_va_pred_fin, "  LightGBM (final) (Val)")
 va_dnrmse_fin = compute_daytime_nrmse(val_fe[TARGET].values, y_va_pred_fin, val_fe["GHI"].values)
 print(f"  LightGBM (final) Val Daytime nRMSE = {va_dnrmse_fin:.2f}%")
-X_te_fin = test_fe[FINAL_FEATURES].values
-y_te_pred_fin = lgb_fin_default.predict(X_te_fin).clip(0)
-te_m_fin = compute_metrics(test_fe[TARGET].values, y_te_pred_fin, "  LightGBM (final) (Test)")
-te_dnrmse_fin = compute_daytime_nrmse(test_fe[TARGET].values, y_te_pred_fin, test_fe["GHI"].values)
-print(f"  LightGBM (final) Test Daytime nRMSE = {te_dnrmse_fin:.2f}%")
-results["LightGBM (final)"] = {"train": tr_m_fin, "val": va_m_fin, "test": te_m_fin,
-                                "val_daytime_nrmse": va_dnrmse_fin, "test_daytime_nrmse": te_dnrmse_fin}
-importance_dfs["LightGBM (final)"] = compute_importance(lgb_fin_default, None, FINAL_FEATURES, train_fe, "lightgbm")
+results["LightGBM (final)"] = {"train": tr_m_fin, "val": va_m_fin,
+                                "val_daytime_nrmse": va_dnrmse_fin}
+importance_dfs["LightGBM (final)"] = compute_importance(lgb_fin_default, None, EXPANDED_FEATURES, train_fe, "lightgbm")
 
-print("\n--- Tuning LightGBM for FINAL_FEATURES ---")
+print("\n--- Tuning LightGBM for EXPANDED_FEATURES ---")
 
 def lgb_objective_final(trial):
     params = {
@@ -276,7 +264,7 @@ results["LightGBM (tuned)"] = {"train": tr_m, "val": va_m,
                                 "val_daytime_nrmse": va_dnrmse}
 importance_dfs["LightGBM (tuned)"] = compute_importance(best_lgb, None, FEATURE_SET, train_fe, "lightgbm")
 
-print("\n--- Retraining LightGBM (final, tuned on FINAL_FEATURES) ---")
+print("\n--- Retraining LightGBM (final, tuned on EXPANDED_FEATURES) ---")
 best_lgb_fin = lgb.LGBMRegressor(**lgb_study_fin.best_params, random_state=42, n_jobs=-1, verbose=-1)
 best_lgb_fin.fit(X_tr_fin, y_tr_fin)
 models["LightGBM (final tuned)"] = best_lgb_fin
@@ -284,19 +272,14 @@ scalers["LightGBM (final tuned)"] = None
 
 y_tr_pred_ft = best_lgb_fin.predict(X_tr_fin).clip(0)
 tr_m_ft = compute_metrics(train_fe[TARGET].values, y_tr_pred_ft, "  LightGBM (final tuned) (Train)")
-X_va_ft = val_fe[FINAL_FEATURES].values
+X_va_ft = val_fe[EXPANDED_FEATURES].values
 y_va_pred_ft = best_lgb_fin.predict(X_va_ft).clip(0)
 va_m_ft = compute_metrics(val_fe[TARGET].values, y_va_pred_ft, "  LightGBM (final tuned) (Val)")
 va_dnrmse_ft = compute_daytime_nrmse(val_fe[TARGET].values, y_va_pred_ft, val_fe["GHI"].values)
 print(f"  LightGBM (final tuned) Val Daytime nRMSE = {va_dnrmse_ft:.2f}%")
-X_te_ft = test_fe[FINAL_FEATURES].values
-y_te_pred_ft = best_lgb_fin.predict(X_te_ft).clip(0)
-te_m_ft = compute_metrics(test_fe[TARGET].values, y_te_pred_ft, "  LightGBM (final tuned) (Test)")
-te_dnrmse_ft = compute_daytime_nrmse(test_fe[TARGET].values, y_te_pred_ft, test_fe["GHI"].values)
-print(f"  LightGBM (final tuned) Test Daytime nRMSE = {te_dnrmse_ft:.2f}%")
-results["LightGBM (final tuned)"] = {"train": tr_m_ft, "val": va_m_ft, "test": te_m_ft,
-                                      "val_daytime_nrmse": va_dnrmse_ft, "test_daytime_nrmse": te_dnrmse_ft}
-importance_dfs["LightGBM (final tuned)"] = compute_importance(best_lgb_fin, None, FINAL_FEATURES, train_fe, "lightgbm")
+results["LightGBM (final tuned)"] = {"train": tr_m_ft, "val": va_m_ft,
+                                      "val_daytime_nrmse": va_dnrmse_ft}
+importance_dfs["LightGBM (final tuned)"] = compute_importance(best_lgb_fin, None, EXPANDED_FEATURES, train_fe, "lightgbm")
 
 full_model_configs = MODEL_CONFIGS + [("LightGBM (tuned)", "lightgbm_tuned"),
                                        ("LightGBM (final)", "lightgbm_default"),
@@ -321,52 +304,6 @@ print("\nVIF Analysis:")
 print(vif_df.to_string())
 
 print("\n" + "=" * 60)
-print("CORRELATION MATRIX (15 weather columns from Renewable.csv)")
-print("=" * 60)
-
-WEATHER_COLS = [
-    "GHI", "temp", "pressure", "humidity", "wind_speed",
-    "rain_1h", "snow_1h", "clouds_all", "isSun", "sunlightTime",
-    "dayLength", "SunlightTime/daylength", "weather_type", "hour", "month",
-]
-raw_df = pd.read_csv("data/filled_renewable.csv")
-corr_df = raw_df[WEATHER_COLS].corr()
-print(corr_df.to_string())
-
-pairs = []
-for i in range(len(WEATHER_COLS)):
-    for j in range(i + 1, len(WEATHER_COLS)):
-        pairs.append((corr_df.values[i, j], WEATHER_COLS[i], WEATHER_COLS[j]))
-pairs.sort(key=lambda x: x[0], reverse=True)
-
-print("\n--- POSITIVE CORRELATION ---")
-for val, a, b in [p for p in pairs if p[0] > 0]:
-    print(f"  {a:>28} vs {b:<28}  {val:+.4f}")
-
-print("\n--- NEGATIVE CORRELATION ---")
-for val, a, b in [p for p in pairs if p[0] < 0]:
-    print(f"  {a:>28} vs {b:<28}  {val:+.4f}")
-
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots(figsize=(14, 12))
-im = ax.imshow(corr_df.values, cmap="RdYlBu", vmin=-1, vmax=1)
-ax.set_xticks(range(len(WEATHER_COLS)))
-ax.set_yticks(range(len(WEATHER_COLS)))
-ax.set_xticklabels(WEATHER_COLS, rotation=45, ha="right", fontsize=8)
-ax.set_yticklabels(WEATHER_COLS, fontsize=8)
-for i in range(len(WEATHER_COLS)):
-    for j in range(len(WEATHER_COLS)):
-        val = corr_df.values[i, j]
-        color = "white" if abs(val) > 0.5 else "black"
-        ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=6, color=color)
-fig.colorbar(im, ax=ax, shrink=0.75)
-ax.set_title("Weather Feature Correlation Matrix", fontweight="bold")
-plt.tight_layout()
-plt.savefig(f"{OUTPUT_DIR}/weather_correlation.png", dpi=150, bbox_inches="tight")
-plt.close()
-print(f"Saved weather_correlation.png")
-
-print("\n" + "=" * 60)
 print("SAVING MODELS AND RESULTS")
 print("=" * 60)
 
@@ -377,13 +314,13 @@ model_data = {
     "results": {k: v for k, v in results.items()},
     "full_model_configs": full_model_configs,
     "FEATURE_SET": FEATURE_SET,
-    "FINAL_FEATURES": FINAL_FEATURES,
+    "EXPANDED_FEATURES": EXPANDED_FEATURES,
 }
 with open("data/models.pkl", "wb") as f:
     pickle.dump(model_data, f)
 print("Saved models to data/models.pkl")
 
-test_data = {
+split_data = {
     "train_fe": train_fe,
     "val_fe": val_fe,
     "test_fe": test_fe,
@@ -392,7 +329,7 @@ test_data = {
     "test_pp": test_pp,
 }
 with open("data/split_data.pkl", "wb") as f:
-    pickle.dump(test_data, f)
+    pickle.dump(split_data, f)
 print("Saved split data to data/split_data.pkl")
 
 print("\nTRAINING COMPLETE\n")

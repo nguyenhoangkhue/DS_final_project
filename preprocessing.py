@@ -468,14 +468,43 @@ def run_preprocessing():
     print(f"Val FE:   {len(val_fe):,} rows")
     print(f"Test FE:  {len(test_fe):,} rows")
 
+    print("\n" + "=" * 60)
+    print("FEATURE IMPORTANCE (baseline)")
+    print("=" * 60)
+
+    WEATHER_COLS = [
+        "GHI", "temp", "pressure", "humidity", "wind_speed",
+        "rain_1h", "snow_1h", "clouds_all", "isSun", "sunlightTime",
+        "dayLength", "SunlightTime/daylength", "weather_type", "hour", "month",
+    ]
+    _target_corr = train_fe[WEATHER_COLS].corrwith(train_fe[TARGET]).sort_values(ascending=False)
+    print(f"\n  Correlation with {TARGET}:")
+    print(f"  {'Variable':>28}  {'Pearson r':>10}")
+    print(f"  {'-'*40}")
+    for var in _target_corr.index:
+        print(f"  {var:>28}  {_target_corr[var]:+10.4f}")
+    import matplotlib.pyplot as plt
+    _colors = ["#378ADD" if v >= 0 else "#E05252" for v in _target_corr.values]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.barh(_target_corr.index, _target_corr.values, color=_colors, edgecolor="white", linewidth=0.5)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("Pearson r")
+    ax.set_title(f"Correlation of Weather Features with {TARGET}", fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(f"{TARGET_DIR}/weather_vs_energydelta.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {TARGET_DIR}/weather_vs_energydelta.png")
+
     print("\nPREPROCESSING COMPLETE\n")
-    return train_fe, val_fe, test_fe, train_pp, val_pp, test_pp
+    return train_fe, val_fe, test_fe, train_pp, val_pp, test_pp, _target_corr
 
 if __name__ == "__main__":
-    train_fe, val_fe, test_fe, train_pp, val_pp, test_pp = run_preprocessing()
+    train_fe, val_fe, test_fe, train_pp, val_pp, test_pp, _target_corr = run_preprocessing()
     import pickle
     for name, obj in [("train_fe", train_fe), ("val_fe", val_fe), ("test_fe", test_fe),
                        ("train_pp", train_pp), ("val_pp", val_pp), ("test_pp", test_pp)]:
         with open(f"data/{name}.pkl", "wb") as f:
             pickle.dump(obj, f)
+    with open("data/target_corr.pkl", "wb") as f:
+        pickle.dump(_target_corr, f)
     print("Saved engineered data to pickle files.")

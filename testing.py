@@ -17,7 +17,7 @@ import lightgbm as lgb
 import xgboost as xgb
 
 from config import (
-    TARGET, TARGET_DIR, TOP5_FEATURES, EXPANDED_FEATURES, FINAL_FEATURES,
+    TARGET, TARGET_DIR, TOP5_FEATURES, EXPANDED_FEATURES,
     MODEL_COLORS, MODEL_CONFIGS, DAYTIME_FEATURES, REF_RED,
     OBSERVED_WEATHER_FEATURES, FORECAST_FEATURE_SET,
 )
@@ -301,6 +301,34 @@ for label, mtype in full_model_configs:
     nrmse_f = (rmse_f / rng_f * 100) if rng_f > 0 else 0
     print(f"  {label} 24h RMSE={rmse_f:.1f} Wh, nRMSE={nrmse_f:.2f}%")
 
+# Figure: Nowcast comparison — separate panel per model
+time_axis = pd.date_range(forecast_start, forecast_start + pd.Timedelta(hours=23, minutes=45), periods=96)
+n_models = len(full_model_configs)
+ncols, nrows = 3, 3
+fig, axes = plt.subplots(nrows, ncols, figsize=(16, 12))
+axes = axes.flatten()
+for idx, (label, mtype) in enumerate(full_model_configs):
+    ax = axes[idx]
+    fct = forecasts_nc[label].clip(0)
+    _rng = actual.max() - actual.min()
+    nrmse_val = (np.sqrt(mean_squared_error(actual, fct)) / _rng * 100) if _rng > 0 else 0
+    ax.plot(time_axis, actual, color="black", linewidth=1.5, label="Actual")
+    ax.plot(time_axis, fct, color=MODEL_COLORS.get(label, "#888888"), linewidth=1.2, alpha=0.85, label="Forecast")
+    ax.set_title(f"{label} — nRMSE={nrmse_val:.2f}%", fontsize=10, fontweight="bold")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    if idx >= 6:
+        ax.set_xlabel("Time", fontsize=9)
+    if idx % 3 == 0:
+        ax.set_ylabel(f"{TARGET} (Wh)", fontsize=9)
+for idx in range(n_models, nrows * ncols):
+    axes[idx].axis("off")
+fig.suptitle(f"24-Hour Nowcast Rollout — {forecast_start.date()}", fontsize=14, fontweight="bold")
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/13_nowcast_comparison.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 13_nowcast_comparison.png")
+
 # Walk-forward evaluation on nowcast models
 print("\n--- Walk-Forward Evaluation (nowcast, n=30 windows) ---")
 for label, mtype in full_model_configs:
@@ -329,6 +357,22 @@ rmse_fc = np.sqrt(mean_squared_error(actual_fc, fct_fc.clip(0)))
 rng_fc = actual_fc.max() - actual_fc.min()
 nrmse_fc = (rmse_fc / rng_fc * 100) if rng_fc > 0 else 0
 print(f"\n  Forecast Model 24h RMSE={rmse_fc:.1f} Wh, nRMSE={nrmse_fc:.2f}% (climatology)")
+
+# Figure: True forecast comparison (climatology, no future weather)
+fig, ax = plt.subplots(figsize=(14, 5))
+time_axis_fc = pd.date_range(forecast_start, forecast_start + pd.Timedelta(hours=23, minutes=45), periods=96)
+ax.plot(time_axis_fc, actual_fc, color="black", linewidth=2, label="Actual")
+ax.plot(time_axis_fc, fct_fc.clip(0), color="#E05252", linewidth=1.5, alpha=0.85,
+        label=f"Forecast LGB (climatology) — nRMSE={nrmse_fc:.2f}%")
+ax.set_xlabel("Time", fontsize=12)
+ax.set_ylabel(f"{TARGET} (Wh)", fontsize=12)
+ax.set_title(f"True 24-Hour Forecast (no future weather) — {forecast_start.date()}", fontsize=13, fontweight="bold")
+ax.legend(fontsize=10)
+ax.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/14_true_forecast.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 14_true_forecast.png")
 
 # Walk-forward on forecast model (Issue 7)
 print("\n--- Walk-Forward Evaluation (forecast model, n=50 windows) ---")

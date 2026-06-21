@@ -45,8 +45,6 @@ EXPANDED_FEATURES = [
     "GHI_x_sun", "GHI_x_isSun",
 ]
 
-FINAL_FEATURES = EXPANDED_FEATURES
-
 MODEL_COLORS = {
     "Linear Regression": "#7F77DD",
     "Decision Tree":     "#EF9F27",
