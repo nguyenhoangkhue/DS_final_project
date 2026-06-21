@@ -54,7 +54,7 @@ MODEL_COLORS = {
     "MLP":               "#E05252",
     "LightGBM (tuned)":       "#D4833A",
     "LightGBM (final)":       "#2E86AB",
-    "LightGBM (final tuned)": "#1A5276",
+    "LightGBM (final tuned)": "#D62728",
     "Forecast LGB":      "#2E86AB",
 }
 

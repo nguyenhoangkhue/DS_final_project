@@ -634,6 +634,22 @@ tr_pred = get_pred(train_fe)
 va_pred = get_pred(val_fe)
 te_pred = get_pred(test_fe)
 
+# Predictions for tuned models on test set
+te_pred_tuned = None
+te_pred_final_tuned = None
+if "LightGBM (tuned)" in models:
+    X_te_fe = test_fe[FEATURE_SET].values
+    s = scalers.get("LightGBM (tuned)")
+    if s is not None:
+        X_te_fe = s.transform(X_te_fe)
+    te_pred_tuned = models["LightGBM (tuned)"].predict(X_te_fe).clip(0)
+if "LightGBM (final tuned)" in models:
+    X_te_f = test_fe[FINAL_FEATURES].values
+    s = scalers.get("LightGBM (final tuned)")
+    if s is not None:
+        X_te_f = s.transform(X_te_f)
+    te_pred_final_tuned = models["LightGBM (final tuned)"].predict(X_te_f).clip(0)
+
 # Concatenate time indices and values across all splits
 full_index = train_fe.index.append(val_fe.index).append(test_fe.index)
 full_actual = np.concatenate([train_fe[TARGET].values, val_fe[TARGET].values, test_fe[TARGET].values])
@@ -717,111 +733,133 @@ plt.savefig(f"{TARGET_DIR}/11_val_zoom.png", dpi=150, bbox_inches="tight")
 plt.close()
 print("Saved 11_val_zoom.png")
 
-# Test split
-fig, ax = plt.subplots(figsize=(18, 5))
-plot_split_timeline(ax, test_fe.index, test_fe[TARGET].values, te_pred,
-                    "LightGBM — Test Set", True, True)
-plt.tight_layout()
-plt.savefig(f"{TARGET_DIR}/11_test.png", dpi=150, bbox_inches="tight")
-plt.close()
-print("Saved 11_test.png")
+# Test split — separate images per model
+LGB_LABELS = ["LightGBM", "LightGBM (tuned)", "LightGBM (final tuned)"]
+LGB_PREDS  = [te_pred, te_pred_tuned, te_pred_final_tuned]
+AVAIL = [(l, p) for l, p in zip(LGB_LABELS, LGB_PREDS) if p is not None]
 
 test_start = rng.randint(0, max(1, len(test_fe) - ONE_WEEK))
 test_slice = slice(test_start, test_start + ONE_WEEK)
-fig, ax = plt.subplots(figsize=(18, 5))
-plot_split_timeline(ax, test_fe.index[test_slice], test_fe[TARGET].values[test_slice], te_pred[test_slice],
-                    "LightGBM — Test Set (1-Week Zoom)", True, True)
-ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%H:%M"))
-ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-plt.tight_layout()
-plt.savefig(f"{TARGET_DIR}/11_test_zoom.png", dpi=150, bbox_inches="tight")
-plt.close()
-print("Saved 11_test_zoom.png")
+t_idx = test_fe.index[test_slice]
+t_act = test_fe[TARGET].values[test_slice]
+
+for label, pred in AVAIL:
+    safe = label.lower().replace(" ", "_").replace("(", "").replace(")", "")
+    # Full test
+    fig, ax = plt.subplots(figsize=(18, 5))
+    ax.plot(test_fe.index, test_fe[TARGET].values, color="black", linewidth=0.4, alpha=0.7, label="Actual")
+    ax.plot(test_fe.index, pred, color=MODEL_COLORS.get(label, "#888888"), linewidth=0.4, alpha=0.6, label="Predicted")
+    ax.fill_between(test_fe.index, test_fe[TARGET].values, pred, alpha=0.12, color=MODEL_COLORS.get(label, "#888888"))
+    ax.set_title(f"{label} — Test Set", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Energy delta [Wh]")
+    ax.set_xlabel("Time")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    plt.tight_layout()
+    plt.savefig(f"{TARGET_DIR}/11_test_{safe}.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved 11_test_{safe}.png")
+
+    # 1-week zoom
+    fig, ax = plt.subplots(figsize=(18, 5))
+    ax.plot(t_idx, t_act, color="black", linewidth=0.6, alpha=0.8, label="Actual")
+    ax.plot(t_idx, pred[test_slice], color=MODEL_COLORS.get(label, "#888888"), linewidth=0.5, alpha=0.7, label="Predicted")
+    ax.fill_between(t_idx, t_act, pred[test_slice], alpha=0.12, color=MODEL_COLORS.get(label, "#888888"))
+    ax.set_title(f"{label} — Test Set (1-Week Zoom)", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Energy delta [Wh]")
+    ax.set_xlabel("Time")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d\n%H:%M"))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    plt.tight_layout()
+    plt.savefig(f"{TARGET_DIR}/11_test_{safe}_zoom.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved 11_test_{safe}_zoom.png")
 
 # ============================================================
-# 5. FEATURE EXPANSION EXPERIMENT
+# 5. TUNED TOP-5 EXPERIMENT (default vs tuned params, same feature set)
 # ============================================================
 print("\n" + "=" * 60)
-print("FEATURE EXPANSION EXPERIMENT (LightGBM)")
+print("TUNED TOP-5 EXPERIMENT (LightGBM)")
 print("=" * 60)
 
-print(f"\nTraining LightGBM with {len(EXPANDED_FEATURES)} features...")
-X_tr_exp = train_fe[EXPANDED_FEATURES].values
-y_tr_exp = train_fe[TARGET].values
-lgb_exp = lgb.LGBMRegressor(n_estimators=500, max_depth=7, learning_rate=0.05,
-                              num_leaves=31, min_child_samples=10, subsample=0.8,
-                              colsample_bytree=0.8, reg_alpha=0.1, reg_lambda=0.0,
-                              random_state=42, n_jobs=-1, verbose=-1)
-lgb_exp.fit(X_tr_exp, y_tr_exp)
-print(f"  Training R²: {lgb_exp.score(X_tr_exp, y_tr_exp):.4f}")
+with open("data/best_params.json", "r") as f:
+    TUNED_TOP5_PARAMS = json.load(f)
+print(f"  Loaded tuned params: {TUNED_TOP5_PARAMS}")
 
-X_va_exp = val_fe[EXPANDED_FEATURES].values
-y_va_exp = val_fe[TARGET].values
-y_va_pred_exp = lgb_exp.predict(X_va_exp).clip(0)
-va_metrics = compute_metrics(y_va_exp, y_va_pred_exp, "  Expanded Features (Val)")
+X_tr_t5 = train_fe[FEATURE_SET].values
+y_tr_t5 = train_fe[TARGET].values
+lgb_tuned_top5 = lgb.LGBMRegressor(**TUNED_TOP5_PARAMS, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
+lgb_tuned_top5.fit(X_tr_t5, y_tr_t5)
+print(f"  Training R²: {lgb_tuned_top5.score(X_tr_t5, y_tr_t5):.4f}")
 
-X_te_exp = test_fe[EXPANDED_FEATURES].values
-y_te_exp = test_fe[TARGET].values
-y_te_pred_exp = lgb_exp.predict(X_te_exp).clip(0)
-te_metrics = compute_metrics(y_te_exp, y_te_pred_exp, "  Expanded Features (Test)")
+X_va_t5 = val_fe[FEATURE_SET].values
+y_va_t5 = val_fe[TARGET].values
+y_va_pred_t5 = lgb_tuned_top5.predict(X_va_t5).clip(0)
+va_t5_metrics = compute_metrics(y_va_t5, y_va_pred_t5, "  Tuned Top-5 (Val)")
 
-exp_val_daytime_nrmse = compute_daytime_nrmse(y_va_exp, y_va_pred_exp, val_fe["GHI"].values)
-exp_test_daytime_nrmse = compute_daytime_nrmse(y_te_exp, y_te_pred_exp, test_fe["GHI"].values)
-print(f"  Expanded Features Val Daytime nRMSE = {exp_val_daytime_nrmse:.2f}%")
-print(f"  Expanded Features Test Daytime nRMSE = {exp_test_daytime_nrmse:.2f}%")
+X_te_t5 = test_fe[FEATURE_SET].values
+y_te_t5 = test_fe[TARGET].values
+y_te_pred_t5 = lgb_tuned_top5.predict(X_te_t5).clip(0)
+te_t5_metrics = compute_metrics(y_te_t5, y_te_pred_t5, "  Tuned Top-5 (Test)")
 
-# 24h rollout forecast (expanded)
-print("\n  24h Rollout Forecast (expanded features)...")
-fct_exp = forecast_24h(lgb_exp, None, EXPANDED_FEATURES, test_pp, train_pp,
-                       forecast_start)
-actual_96_exp = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
-rmse_f_exp = np.sqrt(mean_squared_error(actual_96_exp, fct_exp.clip(0)))
-rng_f_exp = actual_96_exp.max() - actual_96_exp.min()
-nrmse_f_exp = (rmse_f_exp / rng_f_exp * 100) if rng_f_exp > 0 else 0
-print(f"  24h RMSE={rmse_f_exp:.1f} Wh, nRMSE={nrmse_f_exp:.2f}%")
+t5_val_daytime_nrmse = compute_daytime_nrmse(y_va_t5, y_va_pred_t5, val_fe["GHI"].values)
+t5_test_daytime_nrmse = compute_daytime_nrmse(y_te_t5, y_te_pred_t5, test_fe["GHI"].values)
+print(f"  Tuned Top-5 Val Daytime nRMSE = {t5_val_daytime_nrmse:.2f}%")
+print(f"  Tuned Top-5 Test Daytime nRMSE = {t5_test_daytime_nrmse:.2f}%")
+
+# 24h rollout forecast (tuned top-5)
+print("\n  24h Rollout Forecast (tuned top-5)...")
+fct_t5 = forecast_24h(lgb_tuned_top5, None, FEATURE_SET, test_pp, train_pp,
+                      forecast_start)
+actual_96_t5 = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
+rmse_f_t5 = np.sqrt(mean_squared_error(actual_96_t5, fct_t5.clip(0)))
+rng_f_t5 = actual_96_t5.max() - actual_96_t5.min()
+nrmse_f_t5 = (rmse_f_t5 / rng_f_t5 * 100) if rng_f_t5 > 0 else 0
+print(f"  24h RMSE={rmse_f_t5:.1f} Wh, nRMSE={nrmse_f_t5:.2f}%")
 
 # 24h on val
 val_fc_start = val_fe.index[0]
-fct_exp_val = forecast_24h(lgb_exp, None, EXPANDED_FEATURES, val_pp, train_pp, val_fc_start)
-actual_96_val = val_pp.loc[val_fc_start:val_fc_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
-rmse_f_exp_val = np.sqrt(mean_squared_error(actual_96_val, fct_exp_val.clip(0)))
-rel_f_exp_val = (rmse_f_exp_val / actual_96_val.mean()) * 100
+fct_t5_val = forecast_24h(lgb_tuned_top5, None, FEATURE_SET, val_pp, train_pp, val_fc_start)
+actual_96_val_t5 = val_pp.loc[val_fc_start:val_fc_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
+rmse_f_t5_val = np.sqrt(mean_squared_error(actual_96_val_t5, fct_t5_val.clip(0)))
 
 baseline_label = "LightGBM"
 bl_te = results[baseline_label]["test"]
 bl_va = results[baseline_label]["val"]
-print(f"\n{'Metric':<22} {'Top-5 Val':<16} {'Exp Val':<16} {'Top-5 Test':<16} {'Exp Test':<16}")
-print("-" * 86)
+print(f"\n{'Metric':<26} {'Default Top-5 Val':<18} {'Tuned Top-5 Val':<18} {'Default Top-5 Test':<18} {'Tuned Top-5 Test':<18}")
+print("-" * 98)
 for name, vva, eva, tva, eta in [
-    ("Val RMSE [Wh]", f"{bl_va['rmse']:.1f}", f"{va_metrics['rmse']:.1f}", "", ""),
-    ("Test RMSE [Wh]", "", "", f"{bl_te['rmse']:.1f}", f"{te_metrics['rmse']:.1f}"),
-    ("Val RelErr [%]", f"{bl_va['rel']:.2f}", f"{va_metrics['rel']:.2f}", "", ""),
-    ("Test RelErr [%]", "", "", f"{bl_te['rel']:.2f}", f"{te_metrics['rel']:.2f}"),
-    ("Val nRMSE [%]", f"{bl_va['nrmse']:.2f}", f"{va_metrics['nrmse']:.2f}", "", ""),
-    ("Test nRMSE [%]", "", "", f"{bl_te['nrmse']:.2f}", f"{te_metrics['nrmse']:.2f}"),
+    ("Val RMSE [Wh]", f"{bl_va['rmse']:.1f}", f"{va_t5_metrics['rmse']:.1f}", "", ""),
+    ("Test RMSE [Wh]", "", "", f"{bl_te['rmse']:.1f}", f"{te_t5_metrics['rmse']:.1f}"),
+    ("Val RelErr [%]", f"{bl_va['rel']:.2f}", f"{va_t5_metrics['rel']:.2f}", "", ""),
+    ("Test RelErr [%]", "", "", f"{bl_te['rel']:.2f}", f"{te_t5_metrics['rel']:.2f}"),
+    ("Val nRMSE [%]", f"{bl_va['nrmse']:.2f}", f"{va_t5_metrics['nrmse']:.2f}", "", ""),
+    ("Test nRMSE [%]", "", "", f"{bl_te['nrmse']:.2f}", f"{te_t5_metrics['nrmse']:.2f}"),
     ("Val Daytime nRMSE [%]", f"{results[baseline_label]['val_daytime_nrmse']:.2f}",
-     f"{exp_val_daytime_nrmse:.2f}", "", ""),
+     f"{t5_val_daytime_nrmse:.2f}", "", ""),
     ("Test Daytime nRMSE [%]", "", "", f"{results[baseline_label]['test_daytime_nrmse']:.2f}",
-     f"{exp_test_daytime_nrmse:.2f}"),
-    ("Val R²", f"{bl_va['r2']:.4f}", f"{va_metrics['r2']:.4f}", "", ""),
-    ("Test R²", "", "", f"{bl_te['r2']:.4f}", f"{te_metrics['r2']:.4f}"),
+     f"{t5_test_daytime_nrmse:.2f}"),
+    ("Val R²", f"{bl_va['r2']:.4f}", f"{va_t5_metrics['r2']:.4f}", "", ""),
+    ("Test R²", "", "", f"{bl_te['r2']:.4f}", f"{te_t5_metrics['r2']:.4f}"),
 ]:
-    print(f"{name:<22} {vva:<16} {eva:<16} {tva:<16} {eta:<16}")
+    print(f"{name:<26} {vva:<18} {eva:<18} {tva:<18} {eta:<18}")
 
 baseline_fct = forecasts_nc.get(baseline_label)
 if baseline_fct is not None:
-    baseline_rmse = np.sqrt(mean_squared_error(actual_96_exp, baseline_fct.clip(0)))
-    baseline_nrmse = (baseline_rmse / (actual_96_exp.max() - actual_96_exp.min()) * 100) if actual_96_exp.max() > actual_96_exp.min() else 0
+    baseline_rmse_t5 = np.sqrt(mean_squared_error(actual_96_t5, baseline_fct.clip(0)))
+    baseline_nrmse_t5 = (baseline_rmse_t5 / (actual_96_t5.max() - actual_96_t5.min()) * 100) if actual_96_t5.max() > actual_96_t5.min() else 0
 else:
-    baseline_nrmse = 0
-rng_exp_val = actual_96_val.max() - actual_96_val.min()
-nrmse_f_exp_val = (rmse_f_exp_val / rng_exp_val * 100) if rng_exp_val > 0 else 0
-print(f"{'24h Forecast nRMSE (Test)':<22} {baseline_nrmse:<16.2f} {nrmse_f_exp:<16.2f}")
-print(f"{'24h Forecast nRMSE (Val)':<22} {'':<16} {nrmse_f_exp_val:<16.2f}")
+    baseline_nrmse_t5 = 0
+rng_t5_val = actual_96_val_t5.max() - actual_96_val_t5.min()
+nrmse_f_t5_val = (rmse_f_t5_val / rng_t5_val * 100) if rng_t5_val > 0 else 0
+print(f"{'24h Forecast nRMSE (Test)':<26} {baseline_nrmse_t5:<18.2f} {nrmse_f_t5:<18.2f}")
+print(f"{'24h Forecast nRMSE (Val)':<26} {'':<18} {nrmse_f_t5_val:<18.2f}")
 
-exp_imp = pd.Series(lgb_exp.feature_importances_, index=EXPANDED_FEATURES).sort_values(ascending=False)
-print(f"\nTop 10 features (expanded):")
-print(exp_imp.head(10).to_string())
+t5_imp = pd.Series(lgb_tuned_top5.feature_importances_, index=FEATURE_SET).sort_values(ascending=False)
+print(f"\nTop-5 feature importance (tuned):")
+print(t5_imp.to_string())
 
 # ============================================================
 # 6. DAYTIME-ONLY MODEL (5% Target)
@@ -856,6 +894,7 @@ print("\n  Training daytime-only LightGBM (fixed params)...")
 lgb_day = lgb.LGBMRegressor(n_estimators=1000, max_depth=7, learning_rate=0.03,
                              num_leaves=63, min_child_samples=10, subsample=0.8,
                              colsample_bytree=0.8, reg_alpha=0.1, reg_lambda=0.1,
+                             objective="tweedie", tweedie_variance_power=1.3,
                              random_state=42, n_jobs=-1, verbose=-1)
 lgb_day.fit(X_day, y_day)
 print(f"  Training R²: {lgb_day.score(X_day, y_day):.4f}")
@@ -898,7 +937,8 @@ for ghi_thresh in [25, 50, 100]:
     bp = dict(n_estimators=1000, max_depth=7, learning_rate=0.03, num_leaves=63,
               min_child_samples=10, subsample=0.8, colsample_bytree=0.8,
               reg_alpha=0.1, reg_lambda=0.1)
-    m = lgb.LGBMRegressor(**bp, random_state=42, n_jobs=-1, verbose=-1)
+    m = lgb.LGBMRegressor(**bp, objective="tweedie", tweedie_variance_power=1.3,
+                           random_state=42, n_jobs=-1, verbose=-1)
     m.fit(tr_d[DAYTIME_FEATURES_LOCAL].values, tr_d[TARGET].values)
     r2_tr = m.score(tr_d[DAYTIME_FEATURES_LOCAL].values, tr_d[TARGET].values)
     pred_va = m.predict(val_d[DAYTIME_FEATURES_LOCAL].values).clip(0) if len(val_d) > 0 else np.array([])
@@ -929,7 +969,7 @@ y_va_f = val_fe[TARGET].values
 X_te_f = test_fe[FINAL_FEATURES].values
 y_te_f = test_fe[TARGET].values
 
-final_model = lgb.LGBMRegressor(**FINAL_PARAMS, random_state=42, n_jobs=-1, verbose=-1)
+final_model = lgb.LGBMRegressor(**FINAL_PARAMS, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
 final_model.fit(X_tr_f, y_tr_f)
 pred_va_f = final_model.predict(X_va_f).clip(0)
 pred_f = final_model.predict(X_te_f).clip(0)
@@ -954,6 +994,7 @@ for ghi_thresh in [0, 25, 50, 100, 150, 200]:
     m = lgb.LGBMRegressor(n_estimators=500, max_depth=7, learning_rate=0.05,
                            num_leaves=31, subsample=0.8, colsample_bytree=0.8,
                            reg_alpha=0.1, reg_lambda=0.1,
+                           objective="tweedie", tweedie_variance_power=1.3,
                            random_state=42, n_jobs=-1, verbose=-1)
     va_d = val_fe[val_fe["GHI"] > ghi_thresh]
     m.fit(tr_d[FINAL_FEATURES].values, tr_d[TARGET].values)
@@ -1013,6 +1054,36 @@ fc_td = compute_daytime_nrmse(test_fe[TARGET].values, fc_te_pred, test_fe["GHI"]
 print(f"{'Forecast LGB (no wx)':<20} {'forecast':<8} {fc_va['rmse']:<10.1f} {fc_va['nrmse']:<10.2f} {fc_va['rel']:<10.2f} {fc_va['r2']:<7.4f} "
       f"{fc_te['rmse']:<10.1f} {fc_te['nrmse']:<10.2f} {fc_te['rel']:<10.2f} {fc_te['r2']:<7.4f} {fc_vd:<13.2f} {fc_td:<14.2f}")
 print(f"\n  Walk-Forward Forecast (climatology, {fc_nw} windows): avg 24h RMSE = {fc_overall_rmse:.1f} Wh")
+
+# ============================================================
+# 9. EXPORT PREDICTIONS CSV
+# ============================================================
+Light_GBM_Tuned = "LightGBM (final tuned)"
+if Light_GBM_Tuned in models:
+    fs = FINAL_FEATURES
+    X_te_exp = test_fe[fs].values
+    s = scalers.get(Light_GBM_Tuned)
+    if s is not None:
+        X_te_exp = s.transform(X_te_exp)
+    y_te_pred = models[Light_GBM_Tuned].predict(X_te_exp).clip(0)
+
+    lgb_tuned_pred = None
+    if "LightGBM (tuned)" in models:
+        X_te_tuned = test_fe[FEATURE_SET].values
+        s_t = scalers.get("LightGBM (tuned)")
+        if s_t is not None:
+            X_te_tuned = s_t.transform(X_te_tuned)
+        lgb_tuned_pred = models["LightGBM (tuned)"].predict(X_te_tuned).clip(0)
+
+    tuned_col = lgb_tuned_pred if lgb_tuned_pred is not None else np.full(len(test_fe), np.nan)
+    out = pd.DataFrame({
+        "timestamp": test_fe.index,
+        "forecast_LGBM_final_tuned": y_te_pred.round(1),
+        "forecast_LGBM_tuned": tuned_col.round(1),
+        "EnergyDelta": test_fe[TARGET].values.round(1),
+    })
+    out.to_csv("data/predictions.csv", index=False)
+    print("\nSaved data/predictions.csv")
 
 print("\n" + "=" * 60)
 print("TESTING COMPLETE")

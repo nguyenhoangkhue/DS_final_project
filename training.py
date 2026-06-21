@@ -33,11 +33,14 @@ print("=" * 60)
 
 train_fe = pd.read_pickle("data/train_fe.pkl")
 val_fe = pd.read_pickle("data/val_fe.pkl")
+test_fe = pd.read_pickle("data/test_fe.pkl")
 train_pp = pd.read_pickle("data/train_pp.pkl")
 val_pp = pd.read_pickle("data/val_pp.pkl")
+test_pp = pd.read_pickle("data/test_pp.pkl")
 
 print(f"Train FE: {len(train_fe):,} rows")
 print(f"Val FE:   {len(val_fe):,} rows")
+print(f"Test FE:  {len(test_fe):,} rows")
 
 def compute_metrics(y_true, y_pred, label=""):
     y_pred = y_pred.clip(0)
@@ -84,7 +87,12 @@ def train_model(train_fe, feature_list, model_type="linear", label=""):
     elif model_type == "lightgbm":
         scaler = None
         X_tr = X_train.copy()
+        # Tweedie objective: phù hợp với target zero-inflated (nhiều Energy=0 vào ban đêm
+        # + phần dương lệch phải vào ban ngày). tweedie_variance_power gần 1 -> giống Poisson
+        # (nhiều khối lượng tại 0), gần 2 -> giống Gamma (phù hợp phần dương liên tục).
+        # 1.3-1.5 là điểm khởi đầu tốt cho dữ liệu năng lượng/lượng mưa kiểu này.
         model = lgb.LGBMRegressor(n_estimators=200, max_depth=12, min_samples_leaf=5,
+                                   objective="tweedie", tweedie_variance_power=1.3,
                                    random_state=42, n_jobs=-1, verbose=-1)
     elif model_type == "xgboost":
         scaler = None
@@ -171,8 +179,9 @@ def lgb_objective(trial):
         'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 1.0),
         'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 1.0),
         'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+        'tweedie_variance_power': trial.suggest_float('tweedie_variance_power', 1.05, 1.8),
     }
-    model = lgb.LGBMRegressor(**params, random_state=42, n_jobs=-1, verbose=-1)
+    model = lgb.LGBMRegressor(**params, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
     tscv = TimeSeriesSplit(n_splits=3)
     rmse_scores = []
     for tr_idx, va_idx in tscv.split(X_tr_all):
@@ -197,7 +206,8 @@ X_tr_fin = train_fe[EXPANDED_FEATURES].values
 y_tr_fin = train_fe[TARGET].values
 
 print("\n--- LightGBM with EXPANDED_FEATURES (default params) ---")
-lgb_fin_default = lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
+lgb_fin_default = lgb.LGBMRegressor(objective="tweedie", tweedie_variance_power=1.3,
+                                     random_state=42, n_jobs=-1, verbose=-1)
 lgb_fin_default.fit(X_tr_fin, y_tr_fin)
 models["LightGBM (final)"] = lgb_fin_default
 scalers["LightGBM (final)"] = None
@@ -225,8 +235,9 @@ def lgb_objective_final(trial):
         'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 1.0),
         'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 1.0),
         'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+        'tweedie_variance_power': trial.suggest_float('tweedie_variance_power', 1.05, 1.8),
     }
-    model = lgb.LGBMRegressor(**params, random_state=42, n_jobs=-1, verbose=-1)
+    model = lgb.LGBMRegressor(**params, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
     tscv = TimeSeriesSplit(n_splits=3)
     rmse_scores = []
     for tr_idx, va_idx in tscv.split(X_tr_fin):
@@ -248,7 +259,7 @@ with open("data/best_params_final.json", "w") as f:
     print(f"  Saved best params to data/best_params_final.json")
 
 print("\n--- Retraining LightGBM (tuned on TOP5) ---")
-best_lgb = lgb.LGBMRegressor(**lgb_study.best_params, random_state=42, n_jobs=-1, verbose=-1)
+best_lgb = lgb.LGBMRegressor(**lgb_study.best_params, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
 best_lgb.fit(X_tr_all, y_tr_all)
 models["LightGBM (tuned)"] = best_lgb
 scalers["LightGBM (tuned)"] = None
@@ -265,7 +276,7 @@ results["LightGBM (tuned)"] = {"train": tr_m, "val": va_m,
 importance_dfs["LightGBM (tuned)"] = compute_importance(best_lgb, None, FEATURE_SET, train_fe, "lightgbm")
 
 print("\n--- Retraining LightGBM (final, tuned on EXPANDED_FEATURES) ---")
-best_lgb_fin = lgb.LGBMRegressor(**lgb_study_fin.best_params, random_state=42, n_jobs=-1, verbose=-1)
+best_lgb_fin = lgb.LGBMRegressor(**lgb_study_fin.best_params, objective="tweedie", random_state=42, n_jobs=-1, verbose=-1)
 best_lgb_fin.fit(X_tr_fin, y_tr_fin)
 models["LightGBM (final tuned)"] = best_lgb_fin
 scalers["LightGBM (final tuned)"] = None
