@@ -442,11 +442,12 @@ axes = np.atleast_1d(axes).ravel()
 for i, (label, mtype) in enumerate(full_model_configs):
     ax = axes[i]
     fct = forecasts_nc[label]
-    rel_err = np.sqrt(mean_squared_error(actual_vals, fct.clip(0))) / actual_vals.mean() * 100
+    rng_f5 = actual_vals.max() - actual_vals.min()
+    nrmse_f5 = (np.sqrt(mean_squared_error(actual_vals, fct.clip(0))) / rng_f5 * 100) if rng_f5 > 0 else 0
     ax.plot(time_idx, actual_vals, color="black", linewidth=1.0, label="Actual")
     ax.plot(time_idx, fct, color=MODEL_COLORS[label], linewidth=1.0, linestyle="--", label="Predicted")
     ax.fill_between(time_idx, actual_vals, fct, alpha=0.15, color=MODEL_COLORS[label])
-    ax.set_title(f"{label} — RelErr: {rel_err:.2f}%", fontsize=12, fontweight="bold")
+    ax.set_title(f"{label} — nRMSE: {nrmse_f5:.2f}%", fontsize=12, fontweight="bold")
     ax.legend(fontsize=9)
     ax.set_ylabel("Energy delta [Wh]")
     ax.set_ylim(bottom=0)
@@ -558,17 +559,17 @@ ax1.set_title("RMSE Comparison", fontweight="bold")
 ax1.set_ylabel("RMSE [Wh]")
 
 ax2 = fig.add_subplot(gs[0, 1])
-train_rels = [results[m[0]]["train"]["rel"] for m in full_model_configs]
-val_rels = [results[m[0]]["val"]["rel"] for m in full_model_configs]
-test_rels = [results[m[0]]["test"]["rel"] for m in full_model_configs]
-ax2.bar(x09 - w09, train_rels, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs], alpha=0.35)
-ax2.bar(x09, val_rels, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs], alpha=0.7)
-ax2.bar(x09 + w09, test_rels, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs])
+train_nrmse = [results[m[0]]["train"]["nrmse"] for m in full_model_configs]
+val_nrmse = [results[m[0]]["val"]["nrmse"] for m in full_model_configs]
+test_nrmse = [results[m[0]]["test"]["nrmse"] for m in full_model_configs]
+ax2.bar(x09 - w09, train_nrmse, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs], alpha=0.35)
+ax2.bar(x09, val_nrmse, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs], alpha=0.7)
+ax2.bar(x09 + w09, test_nrmse, w09, color=[MODEL_COLORS[m[0]] for m in full_model_configs])
 ax2.axhline(5, color=REF_RED, linestyle="--", linewidth=1.5)
 ax2.set_xticks(x09)
 ax2.set_xticklabels(model_labels, fontsize=8)
-ax2.set_title("Relative Error Comparison", fontweight="bold")
-ax2.set_ylabel("RelErr [%]")
+ax2.set_title("nRMSE Comparison", fontweight="bold")
+ax2.set_ylabel("nRMSE [%]")
 
 ax3 = fig.add_subplot(gs[1, :])
 actual_96 = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
