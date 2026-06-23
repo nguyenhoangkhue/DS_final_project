@@ -255,8 +255,11 @@ def forecast_24h(model, scaler, feature_list, test_pp, train_pp,
 
     return np.array(predictions)
 
-def evaluate_by_horizon(model, scaler, feature_list, test_pp, train_pp, n_windows=30, use_climatology=False):
+def evaluate_by_horizon(model, scaler, feature_list, test_pp, train_pp, n_windows=30, use_climatology=False, return_details=False):
     errors_by_step = np.zeros((n_windows, 96))
+    window_actuals = []
+    window_forecasts = []
+    window_starts = []
     starts = pd.date_range(test_pp.index.min(), test_pp.index.max() - pd.Timedelta(hours=24),
                             periods=n_windows)
     valid_windows = 0
@@ -266,11 +269,18 @@ def evaluate_by_horizon(model, scaler, feature_list, test_pp, train_pp, n_window
         actual = test_pp.loc[start_ts:start_ts + pd.Timedelta(hours=23, minutes=45), TARGET].values
         if len(actual) == 96:
             errors_by_step[valid_windows] = (actual - fct) ** 2
+            window_actuals.append(actual)
+            window_forecasts.append(fct)
+            window_starts.append(start_ts)
             valid_windows += 1
     errors_by_step = errors_by_step[:valid_windows]
     rmse_by_step = np.sqrt(errors_by_step.mean(axis=0))
     overall_rmse = np.sqrt(errors_by_step.mean())
-    return rmse_by_step, overall_rmse, valid_windows
+    all_actual_concat = np.concatenate(window_actuals) if window_actuals else np.array([])
+    overall_nrmse = (overall_rmse / (all_actual_concat.max() - all_actual_concat.min()) * 100) if len(all_actual_concat) > 0 and all_actual_concat.max() > all_actual_concat.min() else 0
+    if return_details:
+        return rmse_by_step, overall_rmse, overall_nrmse, valid_windows, window_starts, window_forecasts, window_actuals
+    return rmse_by_step, overall_rmse, overall_nrmse, valid_windows
 
 # Issue 5: Don't cherry-pick best day — use a random representative day
 rng = np.random.RandomState(42)
@@ -333,10 +343,10 @@ print("Saved 13_nowcast_comparison.png")
 print("\n--- Walk-Forward Evaluation (nowcast, n=30 windows) ---")
 for label, mtype in full_model_configs:
     fs = model_feature_set(label)
-    rmse_by_step, overall_rmse, nw = evaluate_by_horizon(
+    rmse_by_step, overall_rmse, overall_nrmse, nw = evaluate_by_horizon(
         models[label], scalers[label], fs, test_pp, train_pp,
         n_windows=30, use_climatology=False)
-    print(f"  {label:<22} avg 24h RMSE={overall_rmse:.1f} Wh ({nw} windows)")
+    print(f"  {label:<22} avg 24h RMSE={overall_rmse:.1f} Wh, nRMSE={overall_nrmse:.2f}% ({nw} windows)")
 
 # --- Forecast model rollout (uses climatology — honest forecast) ---
 print("\n--- Training FORECAST model (no future weather) ---")
@@ -376,10 +386,34 @@ print("Saved 14_true_forecast.png")
 
 # Walk-forward on forecast model (Issue 7)
 print("\n--- Walk-Forward Evaluation (forecast model, n=50 windows) ---")
-fc_rmse_by_step, fc_overall_rmse, fc_nw = evaluate_by_horizon(
+fc_rmse_by_step, fc_overall_rmse, fc_overall_nrmse, fc_nw, fc_starts, fc_forecasts, fc_actuals_by_window = evaluate_by_horizon(
     lgb_fc, None, FORECAST_FEATURE_SET, test_pp, train_pp,
-    n_windows=50, use_climatology=True)
-print(f"  Forecast Model avg 24h RMSE={fc_overall_rmse:.1f} Wh ({fc_nw} windows)")
+    n_windows=50, use_climatology=True, return_details=True)
+# reconstruct all_actual from windowed chunks for nRMSE denominator
+_fc_all_actual = np.concatenate(fc_actuals_by_window)
+_fc_nrmse = (fc_overall_rmse / (_fc_all_actual.max() - _fc_all_actual.min()) * 100) if _fc_all_actual.max() > _fc_all_actual.min() else 0
+print(f"  Forecast Model avg 24h RMSE={fc_overall_rmse:.1f} Wh, nRMSE={_fc_nrmse:.2f}% ({fc_nw} windows)")
+
+# Figure 15: Full test-set time series with walk-forward forecasts overlaid
+print("\n--- Walk-Forward Forecast Visualization (full test set time series) ---")
+fig, ax = plt.subplots(figsize=(20, 6))
+# actual energy delta across the full test set
+ax.plot(test_pp.index, test_pp[TARGET], color="black", linewidth=0.5, alpha=0.7, label="Actual EnergyDelta")
+# overlay each walk-forward forecast window at its correct timestamp
+time_resolution = (test_pp.index[1] - test_pp.index[0]).total_seconds() / 60  # minutes per step
+for wi in range(fc_nw):
+    t_start = fc_starts[wi]
+    times = pd.date_range(t_start, periods=96, freq=f"{int(time_resolution)}min")
+    ax.plot(times, fc_forecasts[wi].clip(0), color=REF_RED, linewidth=0.6, alpha=0.5)
+ax.set_title(f"True 24h Forecast (climatology) — Walk-Forward Across Test Set\nOverall: RMSE={fc_overall_rmse:.1f} Wh, nRMSE={_fc_nrmse:.2f}% ({fc_nw} windows)", fontsize=13, fontweight="bold")
+ax.set_xlabel("Timestamp", fontsize=12)
+ax.set_ylabel("EnergyDelta (Wh)", fontsize=12)
+ax.legend(fontsize=10)
+ax.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/15_walkforward_forecast.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("Saved 15_walkforward_forecast.png")
 
 # Issue 6: Error by horizon
 steps_minutes = np.arange(1, 97) * 15
@@ -1053,7 +1087,7 @@ fc_vd = compute_daytime_nrmse(val_fe[TARGET].values, fc_val_pred, val_fe["GHI"].
 fc_td = compute_daytime_nrmse(test_fe[TARGET].values, fc_te_pred, test_fe["GHI"].values)
 print(f"{'Forecast LGB (no wx)':<20} {'forecast':<8} {fc_va['rmse']:<10.1f} {fc_va['nrmse']:<10.2f} {fc_va['rel']:<10.2f} {fc_va['r2']:<7.4f} "
       f"{fc_te['rmse']:<10.1f} {fc_te['nrmse']:<10.2f} {fc_te['rel']:<10.2f} {fc_te['r2']:<7.4f} {fc_vd:<13.2f} {fc_td:<14.2f}")
-print(f"\n  Walk-Forward Forecast (climatology, {fc_nw} windows): avg 24h RMSE = {fc_overall_rmse:.1f} Wh")
+print(f"\n  Walk-Forward Forecast (climatology, {fc_nw} windows): avg 24h RMSE = {fc_overall_rmse:.1f} Wh, nRMSE = {fc_overall_nrmse:.2f}%")
 
 # ============================================================
 # 9. EXPORT PREDICTIONS CSV
@@ -1084,6 +1118,36 @@ if Light_GBM_Tuned in models:
     })
     out.to_csv("data/predictions.csv", index=False)
     print("\nSaved data/predictions.csv")
+
+# ============================================================
+# 10. PREPROCESSING BEFORE/AFTER COMPARISON
+# ============================================================
+print("\n" + "=" * 60)
+print("PREPROCESSING BEFORE/AFTER COMPARISON")
+print("=" * 60)
+
+raw_df = pd.read_csv("data/Renewable.csv", parse_dates=["Time"]).set_index("Time").sort_index()
+filled_df = pd.read_csv("data/filled_renewable.csv", parse_dates=["Time"]).set_index("Time").sort_index()
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 10), sharex=True)
+ax1.plot(raw_df.index, raw_df[TARGET].values, color="#C0392B", linewidth=0.15, alpha=0.6)
+ax1.set_title("Before Preprocessing — Raw Data with Gaps", fontsize=12, fontweight="bold")
+ax1.set_ylabel("EnergyDelta [Wh]", fontsize=10)
+ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+ax1.xaxis.set_major_locator(mdates.YearLocator())
+
+ax2.plot(filled_df.index, filled_df[TARGET].values, color=MODEL_COLORS.get("LightGBM (final)", "#2E86AB"), linewidth=0.15, alpha=0.6)
+ax2.set_title("After Preprocessing — Gaps Filled, Outliers Clipped", fontsize=12, fontweight="bold")
+ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+ax2.xaxis.set_major_locator(mdates.YearLocator())
+
+for ax in (ax1, ax2):
+    ax.set_xlim(pd.Timestamp("2017-01-01"), pd.Timestamp("2022-08-31 17:45"))
+ax2.set_xlabel("Time")
+
+plt.tight_layout()
+plt.savefig(f"{TARGET_DIR}/00_preprocessing_comparison.png", dpi=150, bbox_inches="tight")
+plt.close()
 
 print("\n" + "=" * 60)
 print("TESTING COMPLETE")
