@@ -515,9 +515,17 @@ plt.savefig(f"{TARGET_DIR}/04_error_comparison.png", dpi=150, bbox_inches="tight
 plt.close()
 print("Saved 04_error_comparison.png")
 
-# Figure 05: 24-hour forecast vs actual
-time_idx = pd.date_range(start=forecast_start, periods=96, freq="15min")
-actual_vals = test_pp.loc[forecast_start:forecast_start + pd.Timedelta(hours=23, minutes=45), TARGET].values
+# Figure 05: 24-hour forecast vs actual (2022-06-28)
+fc_start_05 = test_pp.index[test_pp.index.searchsorted(pd.Timestamp("2022-06-28"))]
+time_idx = pd.date_range(start=fc_start_05, periods=96, freq="15min")
+actual_vals = test_pp.loc[fc_start_05:fc_start_05 + pd.Timedelta(hours=23, minutes=45), TARGET].values
+# re-run nowcast predictions for this specific day
+forecasts_05 = {}
+for label, mtype in full_model_configs:
+    fs = model_feature_set(label)
+    fct = forecast_24h(models[label], scalers[label], fs, test_pp, train_pp,
+                       fc_start_05, use_climatology=False)
+    forecasts_05[label] = fct
 
 n_models_f5 = len(full_model_configs)
 n_cols_f5 = 2 if n_models_f5 > 3 else 1
@@ -527,7 +535,7 @@ axes = np.atleast_1d(axes).ravel()
 
 for i, (label, mtype) in enumerate(full_model_configs):
     ax = axes[i]
-    fct = forecasts_nc[label]
+    fct = forecasts_05[label]
     rng_f5 = actual_vals.max() - actual_vals.min()
     nrmse_f5 = (np.sqrt(mean_squared_error(actual_vals, fct.clip(0))) / rng_f5 * 100) if rng_f5 > 0 else 0
     ax.plot(time_idx, actual_vals, color="black", linewidth=1.0, label="Actual")
