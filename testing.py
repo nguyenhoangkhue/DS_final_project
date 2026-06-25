@@ -449,17 +449,17 @@ for label, mtype in full_model_configs:
     va = results[label]["val"]
     te = results[label]["test"]
     table_data.append([label, mtype,
-                       f"{tr['rmse']:.1f}", f"{tr['rel']:.2f}%",
+                       f"{tr['rmse']:.1f}", f"{tr['nrmse']:.2f}%", f"{tr['r2']:.4f}", f"{tr['rel']:.2f}%",
                        f"{va['rmse']:.1f}", f"{va['nrmse']:.2f}%", f"{va['rel']:.2f}%", f"{va['r2']:.4f}",
                        f"{te['rmse']:.1f}", f"{te['nrmse']:.2f}%", f"{te['rel']:.2f}%", f"{te['r2']:.4f}"])
 
-fig, ax = plt.subplots(figsize=(16, 3.5))
+fig, ax = plt.subplots(figsize=(18, 3.5))
 ax.axis("off")
-col_labels = ["Model", "Type", "Train RMSE", "Train RelErr",
+col_labels = ["Model", "Type", "Train RMSE", "Train nRMSE", "Train R²", "Train RelErr",
               "Val RMSE", "Val nRMSE", "Val RelErr", "Val R²",
               "Test RMSE", "Test nRMSE", "Test RelErr", "Test R²"]
 tbl = ax.table(cellText=table_data, colLabels=col_labels, loc="center",
-               cellLoc="center", colWidths=[0.08, 0.06, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07])
+               cellLoc="center", colWidths=[0.075, 0.06, 0.065, 0.065, 0.06, 0.065, 0.065, 0.065, 0.065, 0.06, 0.065, 0.065, 0.065, 0.06])
 tbl.auto_set_font_size(False)
 tbl.set_fontsize(10)
 tbl.scale(1.2, 1.8)
